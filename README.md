@@ -2,7 +2,7 @@
 
 A single-file BJJ class planner + scoreboard-buzzer timer. Built to run from your phone at the gym — install once, works offline, edits persist locally.
 
-Live: **https://jeremy-yap.github.io/mat-time/**
+Live: **https://jeremy-accent.github.io/mat-time/**
 
 ## Features
 
@@ -19,7 +19,7 @@ Live: **https://jeremy-yap.github.io/mat-time/**
 
 ## Use
 
-1. Open `https://jeremy-yap.github.io/mat-time/` on your phone.
+1. Open `https://jeremy-accent.github.io/mat-time/` on your phone.
 2. In Safari: **Share → Add to Home Screen.** In Chrome on Android: **menu → Install app.**
 3. Launch from the home-screen icon (gets you the standalone window without Safari chrome).
 4. Edit the plan to suit the day's class. Hit play when class starts.
