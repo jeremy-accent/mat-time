@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="512" height="512">
+  <!-- Warm paper background, iOS-style rounded square -->
+  <rect width="100" height="100" rx="22" fill="#F4F2EC"/>
+
+  <!-- 4 tatami mats in a 2x2 grid with thin paper-colored gaps -->
+  <g fill="#ECE0C7" stroke="#D8C396" stroke-width="0.8">
+    <rect x="8"  y="8"  width="40" height="40" rx="6"/>
+    <rect x="52" y="8"  width="40" height="40" rx="6"/>
+    <rect x="8"  y="52" width="40" height="40" rx="6"/>
+    <rect x="52" y="52" width="40" height="40" rx="6"/>
+  </g>
+
+  <!-- Subtle horizontal weave lines on each mat -->
+  <g stroke="#D8C396" stroke-width="0.25" opacity="0.7">
+    <line x1="11" y1="18" x2="45" y2="18"/>
+    <line x1="11" y1="28" x2="45" y2="28"/>
+    <line x1="11" y1="38" x2="45" y2="38"/>
+    <line x1="55" y1="18" x2="89" y2="18"/>
+    <line x1="55" y1="28" x2="89" y2="28"/>
+    <line x1="55" y1="38" x2="89" y2="38"/>
+    <line x1="11" y1="62" x2="45" y2="62"/>
+    <line x1="11" y1="72" x2="45" y2="72"/>
+    <line x1="11" y1="82" x2="45" y2="82"/>
+    <line x1="55" y1="62" x2="89" y2="62"/>
+    <line x1="55" y1="72" x2="89" y2="72"/>
+    <line x1="55" y1="82" x2="89" y2="82"/>
+  </g>
+
+  <!-- Coral accent: small dot at the focal point of the bottom-right mat -->
+  <circle cx="72" cy="72" r="5.5" fill="#C96342"/>
+</svg>

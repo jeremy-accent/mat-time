@@ -1,0 +1,1076 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Mat Time">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#C96342">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="icon" type="image/png" href="icon-192.png">
+<title>Mat Time</title>
+<style>
+  :root {
+    --bg: #F4F2EC;
+    --panel: #FAF9F4;
+    --panel-2: #F0EEE5;
+    --ink: #1F1E1D;
+    --ink-soft: #3D3B38;
+    --muted: #8A8780;
+    --border: #E5E2D9;
+    --border-soft: #EFEDE5;
+    --coral: #C96342;
+    --coral-hover: #B5563A;
+    --coral-soft: #F4DBD2;
+    --rest:  #DEE3D7;
+    --shadow-sm: 0 1px 2px rgba(75, 60, 40, 0.05);
+    --shadow-md: 0 4px 14px rgba(75, 60, 40, 0.07);
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-bot: env(safe-area-inset-bottom, 0px);
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg); color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 16px; line-height: 1.4;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overscroll-behavior-y: contain;
+  }
+  body { user-select: none; -webkit-user-select: none; }
+  input, textarea { user-select: text; -webkit-user-select: text; }
+  button, input { font: inherit; color: inherit; }
+  button { cursor: pointer; background: transparent; border: 0; padding: 0; }
+
+  .serif { font-family: Georgia, "Iowan Old Style", serif; }
+
+  main {
+    max-width: 560px; margin: 0 auto;
+    padding: calc(14px + var(--safe-top)) 14px calc(28px + var(--safe-bot));
+  }
+
+  /* ---------- Header ---------- */
+  .app-header {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 14px;
+  }
+  .app-title {
+    font-family: Georgia, serif; font-size: 22px; margin: 0;
+    letter-spacing: -0.01em;
+  }
+  .vol-control { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+  .vol-control svg { width: 18px; height: 18px; }
+  .vol-control input[type="range"] {
+    -webkit-appearance: none; appearance: none;
+    width: 90px; height: 4px; background: var(--border); border-radius: 2px;
+    margin: 0;
+  }
+  .vol-control input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: var(--coral); cursor: pointer;
+  }
+  .vol-control input[type="range"]::-moz-range-thumb {
+    width: 16px; height: 16px; border-radius: 50%; border: 0;
+    background: var(--coral); cursor: pointer;
+  }
+
+  /* ---------- Timer card (sticky) ---------- */
+  .timer {
+    position: sticky; top: calc(var(--safe-top) + 4px); z-index: 10;
+    background: var(--panel);
+    border: 1px solid var(--border); border-radius: 18px;
+    padding: 18px 18px 16px;
+    box-shadow: var(--shadow-md);
+    margin-bottom: 18px;
+    text-align: center;
+  }
+  .timer.finished { background: var(--coral-soft); border-color: var(--coral); }
+  .timer-label {
+    font-size: 11px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.08em;
+    margin-bottom: 2px;
+  }
+  .timer-segname {
+    font-family: Georgia, serif; font-size: 19px;
+    margin: 0 0 12px; min-height: 1.2em; line-height: 1.2;
+    color: var(--ink);
+  }
+  .countdown {
+    font-variant-numeric: tabular-nums; font-feature-settings: "tnum";
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 72px; line-height: 1; font-weight: 300;
+    margin: 4px 0 16px;
+    letter-spacing: -0.02em;
+    -webkit-user-select: none; user-select: none;
+    touch-action: manipulation;
+  }
+  .controls {
+    display: flex; justify-content: center; align-items: center; gap: 12px;
+    margin-bottom: 10px;
+  }
+  .ctrl-btn {
+    width: 52px; height: 52px; border-radius: 50%;
+    background: var(--panel-2);
+    display: inline-flex; align-items: center; justify-content: center;
+    transition: transform 80ms ease, background 80ms ease;
+    color: var(--ink-soft);
+  }
+  .ctrl-btn:active { transform: scale(0.93); background: var(--border-soft); }
+  .ctrl-btn svg { width: 22px; height: 22px; }
+  .ctrl-play {
+    width: 72px; height: 72px;
+    background: var(--coral); color: white;
+  }
+  .ctrl-play:active { background: var(--coral-hover); }
+  .ctrl-play svg { width: 28px; height: 28px; }
+  .next-up {
+    font-size: 13px; color: var(--muted); margin-top: 6px;
+    min-height: 1.4em;
+  }
+  .next-up strong { color: var(--ink-soft); font-weight: 500; }
+  .totals { font-size: 12px; color: var(--muted); margin-top: 4px; font-variant-numeric: tabular-nums; }
+
+  /* ---------- Editor ---------- */
+  .editor-head {
+    display: flex; justify-content: space-between; align-items: center;
+    margin: 8px 4px 6px;
+  }
+  .editor-head h2 {
+    font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em;
+    margin: 0; font-weight: 600;
+  }
+  .editor-head .plan-total {
+    font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums;
+  }
+
+  .seg-list { list-style: none; padding: 0; margin: 0 0 8px; }
+  .seg-row {
+    display: grid;
+    grid-template-columns: 28px 1fr 66px 32px;
+    align-items: center; gap: 6px;
+    padding: 8px 10px;
+    margin-bottom: 6px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    position: relative;
+    touch-action: pan-y;
+    transition: background 120ms ease, border-color 120ms ease, opacity 120ms ease;
+  }
+  .seg-row.current {
+    background: var(--coral-soft);
+    border-color: var(--coral);
+  }
+  .seg-row.completed { opacity: 0.45; }
+  .seg-row.dragging {
+    opacity: 0.4;
+    z-index: 1;
+  }
+  .seg-row.drag-clone {
+    position: fixed; z-index: 999; pointer-events: none;
+    box-shadow: 0 8px 24px rgba(75, 60, 40, 0.18);
+    opacity: 0.95; margin: 0;
+    background: var(--panel);
+  }
+  .seg-handle {
+    cursor: grab; touch-action: none;
+    color: var(--muted); user-select: none;
+    display: flex; align-items: center; justify-content: center;
+    height: 32px; width: 28px;
+    font-size: 20px; line-height: 1;
+  }
+  .seg-handle:active { cursor: grabbing; }
+  .seg-name-input {
+    border: 0; background: transparent; outline: 0;
+    padding: 6px 4px; min-width: 0; width: 100%;
+    font-size: 15px; color: var(--ink);
+    border-radius: 6px;
+  }
+  .seg-name-input:focus { background: var(--bg); }
+  .seg-duration-input {
+    border: 0; background: var(--panel-2);
+    padding: 6px 6px; border-radius: 6px;
+    text-align: center; width: 100%;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 14px;
+    outline: 0;
+    color: var(--ink);
+  }
+  .seg-duration-input:focus { background: var(--bg); box-shadow: inset 0 0 0 1px var(--coral); }
+  .seg-delete {
+    width: 32px; height: 32px; border-radius: 50%;
+    color: var(--muted); font-size: 18px;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .seg-delete:active { background: var(--panel-2); color: var(--coral); }
+
+  /* Tap empty space on a row to jump timer there */
+  .seg-jump-area {
+    position: absolute; left: 32px; right: 100px; top: 0; bottom: 0;
+    cursor: pointer;
+  }
+
+  .add-btn {
+    display: block; width: 100%;
+    padding: 12px; margin: 4px 0 10px;
+    text-align: center; font-size: 14px; color: var(--muted);
+    background: transparent;
+    border: 1px dashed var(--border); border-radius: 12px;
+  }
+  .add-btn:active { background: var(--panel); color: var(--ink-soft); }
+
+  .footer-actions {
+    display: flex; gap: 8px; justify-content: center;
+    margin: 18px 0 0;
+  }
+  .text-btn {
+    font-size: 13px; color: var(--muted);
+    padding: 8px 14px; border-radius: 8px;
+  }
+  .text-btn:active { background: var(--panel); color: var(--ink); }
+
+  /* ---------- Toast ---------- */
+  .toast {
+    position: fixed;
+    bottom: calc(20px + var(--safe-bot));
+    left: 50%; transform: translateX(-50%);
+    background: var(--ink); color: var(--bg);
+    padding: 10px 16px; border-radius: 24px;
+    display: flex; align-items: center; gap: 14px;
+    font-size: 14px;
+    box-shadow: var(--shadow-md);
+    z-index: 100;
+    max-width: calc(100% - 40px);
+  }
+  .toast button {
+    background: transparent; border: 0; color: var(--coral-soft);
+    font-weight: 600; padding: 4px 6px;
+  }
+  .toast.hidden { display: none; }
+
+  /* Subtle "rest" hint for segments named "Rest" */
+  .seg-row[data-rest="true"] { background: var(--rest); border-color: #C2CBB6; }
+  .seg-row[data-rest="true"].current { background: var(--coral-soft); border-color: var(--coral); }
+
+  /* Disable double-tap zoom on controls */
+  .ctrl-btn, .seg-handle, .seg-delete, .add-btn, .text-btn { touch-action: manipulation; }
+
+  /* Slightly different on desktop */
+  @media (min-width: 600px) {
+    .countdown { font-size: 84px; }
+  }
+</style>
+</head>
+<body>
+
+<main>
+  <header class="app-header">
+    <h1 class="app-title">Mat Time</h1>
+    <label class="vol-control" aria-label="Volume">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+        <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+      </svg>
+      <input id="volSlider" type="range" min="0" max="100" step="1" value="80">
+    </label>
+  </header>
+
+  <!-- ===== TIMER ===== -->
+  <section class="timer" id="timerCard" aria-live="polite">
+    <div class="timer-label" id="timerLabel">Now</div>
+    <div class="timer-segname serif" id="curName">—</div>
+    <div class="countdown" id="countdown">00:00</div>
+    <div class="controls">
+      <button class="ctrl-btn" id="prevBtn" aria-label="Previous segment">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zM9.5 12l8.5 6V6z"/></svg>
+      </button>
+      <button class="ctrl-btn ctrl-play" id="playBtn" aria-label="Play">
+        <svg id="playIcon" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+      </button>
+      <button class="ctrl-btn" id="nextBtn" aria-label="Next segment">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6h2v12h-2z"/></svg>
+      </button>
+    </div>
+    <div class="next-up" id="nextUp">&nbsp;</div>
+    <div class="totals" id="totals">0:00 / 0:00</div>
+  </section>
+
+  <!-- ===== EDITOR ===== -->
+  <section>
+    <div class="editor-head">
+      <h2>Plan</h2>
+      <span class="plan-total" id="planTotal">0:00</span>
+    </div>
+    <ol class="seg-list" id="segList"></ol>
+    <button class="add-btn" id="addBtn">+ Add segment</button>
+    <div class="footer-actions">
+      <button class="text-btn" id="resetBtn">Reset to default plan</button>
+    </div>
+  </section>
+</main>
+
+<!-- Toast -->
+<div class="toast hidden" id="toast" role="status">
+  <span id="toastMsg">Deleted</span>
+  <button id="toastUndo">Undo</button>
+</div>
+
+<script>
+/* ============================================================================
+   Mat Time — single-file BJJ class planner / timer
+   ============================================================================ */
+
+// ---------- DEFAULT PLAN ----------
+// The 90-min closed-guard passing class we designed.
+const DEFAULT_PLAN = {
+  version: 1,
+  segments: [
+    { name: "Warm ups",                                   seconds: 12 * 60 },
+    { name: "Water break",                                seconds:  1 * 60 },
+    { name: "Technique demo 1",                           seconds:  5 * 60 },
+    { name: "Technique drills 1",                         seconds:  8 * 60 },
+    { name: "Technique demo 2",                           seconds:  5 * 60 },
+    { name: "Technique drills 2",                         seconds:  8 * 60 },
+    { name: "Q&A",                                        seconds:  3 * 60 },
+    { name: "Game 1 — Stand up or stay down",             seconds:  7 * 60 },
+    { name: "Game 2 — Open and pass / sweep & entangle",  seconds:  7 * 60 },
+    { name: "Water break",                                seconds:  1 * 60 },
+    { name: "Situational sparring",                       seconds:  4 * 60 },
+    { name: "Final Q&A",                                  seconds:  3 * 60 },
+    { name: "Sparring round 1",                           seconds:  5 * 60 },
+    { name: "Rest",                                       seconds:  2 * 60 },
+    { name: "Sparring round 2",                           seconds:  5 * 60 },
+    { name: "Rest",                                       seconds:  2 * 60 },
+    { name: "Sparring round 3",                           seconds:  5 * 60 },
+    { name: "Rest",                                       seconds:  2 * 60 },
+    { name: "Sparring round 4",                           seconds:  5 * 60 },
+  ],
+  volume: 0.8,
+};
+
+const STORAGE_KEY = 'mat-time:v1';
+
+// ---------- STATE ----------
+const state = (() => {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && Array.isArray(parsed.segments) && parsed.segments.length) {
+        return {
+          segments: parsed.segments.map(s => ({
+            id: s.id || crypto.randomUUID(),
+            name: String(s.name || 'Segment'),
+            seconds: Math.max(1, Math.min(3 * 60 * 60, parseInt(s.seconds, 10) || 60)),
+          })),
+          volume: typeof parsed.volume === 'number' ? parsed.volume : 0.8,
+        };
+      }
+    }
+  } catch (_) {}
+  return cloneDefault();
+})();
+
+function cloneDefault() {
+  return {
+    segments: DEFAULT_PLAN.segments.map(s => ({
+      id: crypto.randomUUID(),
+      name: s.name,
+      seconds: s.seconds,
+    })),
+    volume: DEFAULT_PLAN.volume,
+  };
+}
+
+let saveTimer = null;
+function saveState() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        version: 1,
+        segments: state.segments,
+        volume: state.volume,
+        lastModified: Date.now(),
+      }));
+    } catch (e) { console.warn('Save failed', e); }
+  }, 200);
+}
+
+// ---------- FORMATTING ----------
+function fmt(totalSec) {
+  totalSec = Math.max(0, Math.ceil(totalSec));
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+}
+function fmtTotal(totalSec) {
+  totalSec = Math.max(0, Math.round(totalSec));
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return h + 'h ' + (m < 10 ? '0' : '') + m + 'm';
+  return m + ':' + (s < 10 ? '0' : '') + s;
+}
+function parseDurationInput(str) {
+  // Accept "mm:ss", "m:ss", "mm", "m" — return seconds or null
+  str = String(str || '').trim();
+  if (!str) return null;
+  if (/^\d+$/.test(str)) return parseInt(str, 10) * 60;
+  const m = str.match(/^(\d{1,3}):([0-5]?\d)$/);
+  if (!m) return null;
+  return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+}
+function sumSeconds(segs) {
+  return segs.reduce((a, s) => a + s.seconds, 0);
+}
+
+// ---------- TIMER ENGINE ----------
+const Timer = {
+  audioCtx: null,
+  silentLoop: null,
+  scheduledBuzzes: [],   // { time, nodes: [] }
+  wakeLock: null,
+  state: 'idle',         // 'idle' | 'running' | 'paused' | 'finished'
+  anchor: 0,             // audioCtx.currentTime when plan virtually started
+  currentIndex: 0,
+  elapsedInSegment: 0,
+  rafHandle: null,
+
+  async ensureAudio() {
+    if (!this.audioCtx) {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      this.audioCtx = new Ctx();
+    }
+    if (this.audioCtx.state === 'suspended') {
+      try { await this.audioCtx.resume(); } catch (_) {}
+    }
+    if (!this.silentLoop) this.startSilentLoop();
+  },
+
+  // Inaudible buffer source keeps iOS' audio session alive while screen is locked
+  startSilentLoop() {
+    const ctx = this.audioCtx;
+    const buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * 2), ctx.sampleRate);
+    // Buffer is zero by default → silent
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.loop = true;
+    src.connect(ctx.destination);
+    src.start();
+    this.silentLoop = src;
+  },
+
+  setupMediaSession() {
+    if (!('mediaSession' in navigator)) return;
+    try {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: state.segments[this.currentIndex]?.name || 'Mat Time',
+        artist: 'Mat Time',
+        album: 'BJJ Class',
+      });
+      navigator.mediaSession.setActionHandler('play', () => this.play());
+      navigator.mediaSession.setActionHandler('pause', () => this.pause());
+      navigator.mediaSession.setActionHandler('previoustrack', () => this.prev());
+      navigator.mediaSession.setActionHandler('nexttrack', () => this.next());
+      navigator.mediaSession.playbackState = this.state === 'running' ? 'playing' : 'paused';
+    } catch (_) {}
+  },
+
+  async requestWakeLock() {
+    if (!('wakeLock' in navigator)) return;
+    try {
+      this.wakeLock = await navigator.wakeLock.request('screen');
+      this.wakeLock.addEventListener('release', () => { this.wakeLock = null; });
+    } catch (_) {}
+  },
+
+  releaseWakeLock() {
+    if (this.wakeLock) {
+      try { this.wakeLock.release(); } catch (_) {}
+      this.wakeLock = null;
+    }
+  },
+
+  async play() {
+    if (this.state === 'running') return;
+    await this.ensureAudio();
+    const before = this.cumBefore(this.currentIndex) + this.elapsedInSegment;
+    this.anchor = this.audioCtx.currentTime - before;
+    this.scheduleAllBuzzes();
+    this.state = 'running';
+    this.requestWakeLock();
+    this.setupMediaSession();
+    this.startDisplayLoop();
+    render();
+  },
+
+  pause() {
+    if (this.state !== 'running') return;
+    const elapsedTotal = this.audioCtx.currentTime - this.anchor;
+    const loc = this.locateAt(elapsedTotal);
+    this.currentIndex = loc.index;
+    this.elapsedInSegment = loc.elapsedInSeg;
+    this.cancelScheduledBuzzes();
+    this.releaseWakeLock();
+    this.state = 'paused';
+    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
+    cancelAnimationFrame(this.rafHandle);
+    render();
+  },
+
+  togglePlay() {
+    if (this.state === 'running') this.pause();
+    else this.play();
+  },
+
+  prev() {
+    // If more than 2s into current, restart current; else jump to previous segment.
+    const elapsed = this.elapsedInSegmentNow();
+    if (elapsed > 2 || this.currentIndex === 0) {
+      this.jumpTo(this.currentIndex);
+    } else {
+      this.jumpTo(this.currentIndex - 1);
+    }
+  },
+
+  next() {
+    if (this.currentIndex + 1 < state.segments.length) {
+      this.jumpTo(this.currentIndex + 1);
+    } else {
+      // At last segment — just finish it
+      this.jumpTo(this.currentIndex);
+      this.elapsedInSegment = state.segments[this.currentIndex].seconds;
+      if (this.state === 'running') this.reschedule();
+      render();
+    }
+  },
+
+  jumpTo(index) {
+    index = Math.max(0, Math.min(state.segments.length - 1, index));
+    this.currentIndex = index;
+    this.elapsedInSegment = 0;
+    if (this.state === 'running') this.reschedule();
+    if (this.state === 'finished') this.state = 'paused';
+    render();
+  },
+
+  reschedule() {
+    if (!this.audioCtx) return;
+    const before = this.cumBefore(this.currentIndex) + this.elapsedInSegment;
+    this.anchor = this.audioCtx.currentTime - before;
+    this.scheduleAllBuzzes();
+  },
+
+  // Called when the plan structure changes (edits, adds, deletes, reorders)
+  onPlanChanged() {
+    if (this.currentIndex >= state.segments.length) {
+      this.currentIndex = Math.max(0, state.segments.length - 1);
+      this.elapsedInSegment = 0;
+    }
+    if (this.state === 'running') this.reschedule();
+    render();
+  },
+
+  elapsedInSegmentNow() {
+    if (this.state !== 'running' || !this.audioCtx) return this.elapsedInSegment;
+    const elapsedTotal = this.audioCtx.currentTime - this.anchor;
+    const loc = this.locateAt(elapsedTotal);
+    return loc.elapsedInSeg;
+  },
+
+  cumBefore(idx) {
+    let c = 0;
+    for (let i = 0; i < idx && i < state.segments.length; i++) c += state.segments[i].seconds;
+    return c;
+  },
+
+  // Given a total-elapsed-since-anchor time, find the current segment & local elapsed
+  locateAt(elapsedTotal) {
+    if (elapsedTotal < 0) elapsedTotal = 0;
+    let cum = 0;
+    for (let i = 0; i < state.segments.length; i++) {
+      const segLen = state.segments[i].seconds;
+      if (elapsedTotal < cum + segLen) {
+        return { index: i, elapsedInSeg: elapsedTotal - cum, past: false };
+      }
+      cum += segLen;
+    }
+    return { index: state.segments.length - 1, elapsedInSeg: state.segments[state.segments.length - 1].seconds, past: true };
+  },
+
+  scheduleAllBuzzes() {
+    this.cancelScheduledBuzzes();
+    if (!this.audioCtx) return;
+    const ctx = this.audioCtx;
+    const segs = state.segments;
+    let cumEnd = 0;
+    for (let i = 0; i < segs.length; i++) {
+      cumEnd += segs[i].seconds;
+      const buzzTime = this.anchor + cumEnd;
+      if (buzzTime > ctx.currentTime + 0.05) {
+        this.scheduleBuzzAt(buzzTime);
+      }
+    }
+  },
+
+  // Scoreboard horn: 2 detuned sawtooth oscillators, ~2s, with envelope and filters
+  scheduleBuzzAt(time) {
+    const ctx = this.audioCtx;
+    const vol = state.volume;
+    if (vol <= 0) {
+      // Still schedule a marker so we know it would have fired, but no sound
+      this.scheduledBuzzes.push({ time, nodes: [] });
+      return;
+    }
+    const buzz = { time, nodes: [] };
+    const masterGain = ctx.createGain();
+    masterGain.gain.setValueAtTime(0, time);
+    masterGain.gain.linearRampToValueAtTime(vol * 0.45, time + 0.025);
+    masterGain.gain.setValueAtTime(vol * 0.45, time + 1.75);
+    masterGain.gain.linearRampToValueAtTime(0, time + 2.0);
+
+    const lowpass = ctx.createBiquadFilter();
+    lowpass.type = 'lowpass';
+    lowpass.frequency.value = 1800;
+    lowpass.Q.value = 0.9;
+
+    const highpass = ctx.createBiquadFilter();
+    highpass.type = 'highpass';
+    highpass.frequency.value = 80;
+
+    masterGain.connect(lowpass).connect(highpass).connect(ctx.destination);
+
+    for (const freq of [165, 169]) {
+      const osc = ctx.createOscillator();
+      osc.type = 'sawtooth';
+      osc.frequency.value = freq;
+      osc.connect(masterGain);
+      osc.start(time);
+      osc.stop(time + 2.05);
+      buzz.nodes.push(osc);
+    }
+    buzz.nodes.push(masterGain, lowpass, highpass);
+    this.scheduledBuzzes.push(buzz);
+  },
+
+  cancelScheduledBuzzes() {
+    for (const buzz of this.scheduledBuzzes) {
+      for (const n of buzz.nodes) {
+        try { n.stop && n.stop(0); } catch (_) {}
+        try { n.disconnect && n.disconnect(); } catch (_) {}
+      }
+    }
+    this.scheduledBuzzes = [];
+  },
+
+  // Test the buzzer without running the plan (used on volume change)
+  async testBuzz() {
+    await this.ensureAudio();
+    this.scheduleBuzzAt(this.audioCtx.currentTime + 0.05);
+  },
+
+  startDisplayLoop() {
+    const tick = () => {
+      if (this.state !== 'running') return;
+      this.updateDisplay();
+      this.rafHandle = requestAnimationFrame(tick);
+    };
+    this.rafHandle = requestAnimationFrame(tick);
+  },
+
+  updateDisplay() {
+    if (!this.audioCtx) return;
+    const elapsedTotal = this.audioCtx.currentTime - this.anchor;
+    const total = sumSeconds(state.segments);
+    if (elapsedTotal >= total) {
+      this.finish();
+      return;
+    }
+    const loc = this.locateAt(elapsedTotal);
+    if (loc.index !== this.currentIndex) {
+      this.currentIndex = loc.index;
+      this.elapsedInSegment = loc.elapsedInSeg;
+      // Update segment name + next-up in the timer card on boundary crossing
+      const seg = state.segments[this.currentIndex];
+      $('curName').textContent = seg.name;
+      const nextSeg = state.segments[this.currentIndex + 1];
+      if (nextSeg) {
+        $('nextUp').innerHTML = 'Up next · <strong>' + escapeHTML(nextSeg.name) + '</strong>';
+      } else {
+        $('nextUp').innerHTML = '<em style="color:var(--muted)">Last segment</em>';
+      }
+      // Refresh media session metadata for new segment
+      if ('mediaSession' in navigator && navigator.mediaSession.metadata) {
+        try {
+          navigator.mediaSession.metadata = new MediaMetadata({
+            title: seg.name,
+            artist: 'Mat Time',
+            album: 'BJJ Class',
+          });
+        } catch (_) {}
+      }
+      renderRowsHighlight();
+    }
+    renderTimerOnly(elapsedTotal, loc);
+  },
+
+  finish() {
+    this.state = 'finished';
+    this.currentIndex = state.segments.length - 1;
+    this.elapsedInSegment = state.segments[this.currentIndex].seconds;
+    this.cancelScheduledBuzzes();
+    this.releaseWakeLock();
+    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
+    cancelAnimationFrame(this.rafHandle);
+    render();
+  },
+
+  reset() {
+    this.cancelScheduledBuzzes();
+    this.releaseWakeLock();
+    cancelAnimationFrame(this.rafHandle);
+    this.state = 'idle';
+    this.currentIndex = 0;
+    this.elapsedInSegment = 0;
+    render();
+  },
+};
+
+// ---------- RENDER ----------
+const $ = (id) => document.getElementById(id);
+
+function renderTimerOnly(elapsedTotal, loc) {
+  const seg = state.segments[Timer.currentIndex];
+  if (!seg) return;
+  const remaining = Math.max(0, seg.seconds - (loc ? loc.elapsedInSeg : Timer.elapsedInSegment));
+  $('countdown').textContent = fmt(remaining);
+  const total = sumSeconds(state.segments);
+  const totalElapsed = elapsedTotal != null ? elapsedTotal : (Timer.cumBefore(Timer.currentIndex) + Timer.elapsedInSegment);
+  $('totals').textContent = fmtTotal(Math.min(totalElapsed, total)) + ' / ' + fmtTotal(total);
+}
+
+function renderTimerCard() {
+  const seg = state.segments[Timer.currentIndex];
+  if (!seg) {
+    $('curName').textContent = '—';
+    $('countdown').textContent = '00:00';
+    $('nextUp').innerHTML = '&nbsp;';
+    $('totals').textContent = '0:00 / 0:00';
+    return;
+  }
+  $('curName').textContent = seg.name;
+  const remaining = Math.max(0, seg.seconds - Timer.elapsedInSegment);
+  $('countdown').textContent = fmt(remaining);
+
+  // Label
+  if (Timer.state === 'finished') $('timerLabel').textContent = 'Class complete';
+  else if (Timer.state === 'running') $('timerLabel').textContent = 'Now';
+  else if (Timer.state === 'paused') $('timerLabel').textContent = 'Paused';
+  else $('timerLabel').textContent = 'Ready';
+
+  $('timerCard').classList.toggle('finished', Timer.state === 'finished');
+
+  // Next up
+  const nextSeg = state.segments[Timer.currentIndex + 1];
+  if (Timer.state === 'finished') {
+    $('nextUp').textContent = 'Tap reset or pick a segment to start again';
+  } else if (nextSeg) {
+    $('nextUp').innerHTML = 'Up next · <strong>' + escapeHTML(nextSeg.name) + '</strong>';
+  } else {
+    $('nextUp').innerHTML = '<em style="color:var(--muted)">Last segment</em>';
+  }
+
+  // Totals
+  const total = sumSeconds(state.segments);
+  const totalElapsed = Timer.cumBefore(Timer.currentIndex) + Timer.elapsedInSegment;
+  $('totals').textContent = fmtTotal(Math.min(totalElapsed, total)) + ' / ' + fmtTotal(total);
+
+  // Play icon
+  const playIcon = $('playIcon');
+  if (Timer.state === 'running') {
+    // Pause icon
+    playIcon.innerHTML = '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>';
+    $('playBtn').setAttribute('aria-label', 'Pause');
+  } else {
+    // Play icon
+    playIcon.innerHTML = '<path d="M8 5v14l11-7z"/>';
+    $('playBtn').setAttribute('aria-label', 'Play');
+  }
+}
+
+function renderRowsHighlight() {
+  const rows = document.querySelectorAll('.seg-row');
+  rows.forEach((row, i) => {
+    row.classList.toggle('current', i === Timer.currentIndex && Timer.state !== 'finished');
+    row.classList.toggle('completed', i < Timer.currentIndex);
+  });
+}
+
+function renderPlanList() {
+  const ol = $('segList');
+  ol.innerHTML = '';
+  state.segments.forEach((seg, i) => {
+    const li = document.createElement('li');
+    li.className = 'seg-row';
+    if (i === Timer.currentIndex && Timer.state !== 'finished') li.classList.add('current');
+    if (i < Timer.currentIndex) li.classList.add('completed');
+    if (/rest/i.test(seg.name)) li.dataset.rest = 'true';
+    li.dataset.id = seg.id;
+    li.dataset.index = i;
+
+    li.innerHTML = [
+      '<div class="seg-handle" data-handle>≡</div>',
+      '<input class="seg-name-input" type="text" value="', escapeAttr(seg.name), '" data-role="name" enterkeyhint="done" autocomplete="off" autocapitalize="sentences" spellcheck="false">',
+      '<input class="seg-duration-input" type="text" value="', fmt(seg.seconds), '" data-role="dur" inputmode="numeric" enterkeyhint="done" autocomplete="off">',
+      '<button class="seg-delete" data-role="del" aria-label="Delete segment">×</button>',
+    ].join('');
+
+    ol.appendChild(li);
+  });
+  $('planTotal').textContent = fmtTotal(sumSeconds(state.segments));
+}
+
+function render() {
+  renderPlanList();
+  renderTimerCard();
+}
+
+function escapeHTML(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function escapeAttr(s) { return escapeHTML(s); }
+
+// ---------- EVENT BINDINGS ----------
+$('playBtn').addEventListener('click', () => Timer.togglePlay());
+$('prevBtn').addEventListener('click', () => Timer.prev());
+$('nextBtn').addEventListener('click', () => Timer.next());
+
+// Long-press countdown to reset current segment
+let lpTimer = null;
+const cd = $('countdown');
+const startLP = (e) => {
+  lpTimer = setTimeout(() => {
+    // Reset current segment
+    Timer.elapsedInSegment = 0;
+    if (Timer.state === 'running') Timer.reschedule();
+    render();
+    flashToast('Segment reset');
+  }, 700);
+};
+const cancelLP = () => { clearTimeout(lpTimer); lpTimer = null; };
+cd.addEventListener('pointerdown', startLP);
+cd.addEventListener('pointerup', cancelLP);
+cd.addEventListener('pointerleave', cancelLP);
+cd.addEventListener('pointercancel', cancelLP);
+
+// Add segment
+$('addBtn').addEventListener('click', () => {
+  state.segments.push({
+    id: crypto.randomUUID(),
+    name: 'New segment',
+    seconds: 60,
+  });
+  saveState();
+  Timer.onPlanChanged();
+});
+
+// Reset to default
+$('resetBtn').addEventListener('click', () => {
+  if (!confirm('Replace the current plan with the default 90-min closed-guard passing class?')) return;
+  Object.assign(state, cloneDefault());
+  Timer.reset();
+  saveState();
+  Timer.onPlanChanged();
+});
+
+// Volume
+const vs = $('volSlider');
+vs.value = String(Math.round(state.volume * 100));
+vs.addEventListener('input', () => {
+  state.volume = Math.max(0, Math.min(1, vs.valueAsNumber / 100));
+  saveState();
+});
+// Tap the volume label to test buzzer
+document.querySelector('.vol-control svg').addEventListener('click', () => Timer.testBuzz());
+
+// Delegate list events: name edit, duration edit, delete, jump
+$('segList').addEventListener('change', (e) => {
+  const row = e.target.closest('.seg-row');
+  if (!row) return;
+  const idx = parseInt(row.dataset.index, 10);
+  if (e.target.dataset.role === 'name') {
+    const v = e.target.value.trim() || 'Segment';
+    state.segments[idx].name = v;
+    saveState();
+    Timer.onPlanChanged();
+  } else if (e.target.dataset.role === 'dur') {
+    const secs = parseDurationInput(e.target.value);
+    if (secs === null || secs < 1) {
+      e.target.value = fmt(state.segments[idx].seconds);
+      flashToast('Use mm:ss or whole minutes');
+      return;
+    }
+    state.segments[idx].seconds = secs;
+    saveState();
+    Timer.onPlanChanged();
+  }
+});
+$('segList').addEventListener('click', (e) => {
+  const row = e.target.closest('.seg-row');
+  if (!row) return;
+  const idx = parseInt(row.dataset.index, 10);
+  if (e.target.dataset.role === 'del') {
+    softDelete(idx);
+  }
+});
+// Tap segment name / row whitespace → jump timer to that segment
+$('segList').addEventListener('dblclick', (e) => {
+  const row = e.target.closest('.seg-row');
+  if (!row) return;
+  if (e.target.classList.contains('seg-handle')) return;
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON') return;
+  const idx = parseInt(row.dataset.index, 10);
+  Timer.jumpTo(idx);
+});
+
+// Select all on focus, for fast editing
+$('segList').addEventListener('focusin', (e) => {
+  if (e.target.tagName === 'INPUT') {
+    setTimeout(() => e.target.select && e.target.select(), 10);
+  }
+});
+
+// ---------- SOFT DELETE WITH UNDO ----------
+let pendingDelete = null;
+let toastTimer = null;
+function softDelete(idx) {
+  if (state.segments.length <= 1) {
+    flashToast("Can't delete the last segment");
+    return;
+  }
+  pendingDelete = { index: idx, segment: state.segments[idx] };
+  state.segments.splice(idx, 1);
+  saveState();
+  Timer.onPlanChanged();
+  showUndo('Deleted "' + pendingDelete.segment.name + '"');
+}
+function showUndo(msg) {
+  $('toastMsg').textContent = msg;
+  $('toast').classList.remove('hidden');
+  $('toastUndo').style.display = '';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    $('toast').classList.add('hidden');
+    pendingDelete = null;
+  }, 5000);
+}
+$('toastUndo').addEventListener('click', () => {
+  if (!pendingDelete) return;
+  state.segments.splice(pendingDelete.index, 0, pendingDelete.segment);
+  pendingDelete = null;
+  $('toast').classList.add('hidden');
+  saveState();
+  Timer.onPlanChanged();
+});
+function flashToast(msg) {
+  $('toastMsg').textContent = msg;
+  $('toast').classList.remove('hidden');
+  $('toastUndo').style.display = 'none';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    $('toast').classList.add('hidden');
+    $('toastUndo').style.display = '';
+  }, 1800);
+}
+
+// ---------- DRAG TO REORDER (pointer events; works on touch + mouse) ----------
+let drag = null;
+$('segList').addEventListener('pointerdown', (e) => {
+  if (!e.target.matches('[data-handle]')) return;
+  const row = e.target.closest('.seg-row');
+  if (!row) return;
+  e.preventDefault();
+  const rect = row.getBoundingClientRect();
+  drag = {
+    fromIndex: parseInt(row.dataset.index, 10),
+    row,
+    offsetY: e.clientY - rect.top,
+    startY: e.clientY,
+    pointerId: e.pointerId,
+    moved: false,
+  };
+  row.classList.add('dragging');
+  try { e.target.setPointerCapture(e.pointerId); } catch (_) {}
+});
+document.addEventListener('pointermove', (e) => {
+  if (!drag) return;
+  if (Math.abs(e.clientY - drag.startY) > 4) drag.moved = true;
+  // Find which row we're hovering — simple: iterate rows
+  const rows = Array.from(document.querySelectorAll('.seg-row'));
+  let target = null;
+  for (const r of rows) {
+    if (r === drag.row) continue;
+    const rect = r.getBoundingClientRect();
+    if (e.clientY >= rect.top && e.clientY <= rect.bottom) { target = r; break; }
+  }
+  if (target) {
+    const targetIdx = parseInt(target.dataset.index, 10);
+    const fromIdx = parseInt(drag.row.dataset.index, 10);
+    if (targetIdx !== fromIdx) {
+      // Reorder DOM
+      if (targetIdx > fromIdx) target.after(drag.row);
+      else target.before(drag.row);
+      // Update data-index on all rows
+      document.querySelectorAll('.seg-row').forEach((r, i) => r.dataset.index = String(i));
+    }
+  }
+});
+document.addEventListener('pointerup', (e) => {
+  if (!drag) return;
+  const newOrder = Array.from(document.querySelectorAll('.seg-row')).map(r => r.dataset.id);
+  // Rebuild state.segments in new order
+  const byId = new Map(state.segments.map(s => [s.id, s]));
+  state.segments = newOrder.map(id => byId.get(id)).filter(Boolean);
+  drag.row.classList.remove('dragging');
+  drag = null;
+  saveState();
+  Timer.onPlanChanged();
+});
+document.addEventListener('pointercancel', () => {
+  if (!drag) return;
+  drag.row.classList.remove('dragging');
+  drag = null;
+  render();
+});
+
+// ---------- VISIBILITY: re-sync when returning to tab ----------
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && Timer.state === 'running') {
+    Timer.updateDisplay();
+    Timer.requestWakeLock(); // re-acquire if lost during background
+  }
+});
+
+// ---------- SERVICE WORKER ----------
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  });
+}
+
+// ---------- INITIAL RENDER ----------
+render();
+
+// Save once on first load so a fresh user has a stored plan
+saveState();
+
+</script>
+</body>
+</html>
