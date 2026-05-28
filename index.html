@@ -61,9 +61,42 @@
   .app-title {
     font-family: Georgia, serif; font-size: 22px; margin: 0;
     letter-spacing: -0.01em;
+    white-space: nowrap;
+    flex-shrink: 0;
   }
-  .vol-control { display: flex; align-items: center; gap: 6px; color: var(--muted); }
-  .vol-control svg { width: 18px; height: 18px; pointer-events: none; }
+  .audio-controls {
+    display: flex; align-items: center; gap: 8px;
+    color: var(--muted);
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    max-width: 260px;
+  }
+  .audio-controls svg { width: 18px; height: 18px; pointer-events: none; }
+  .audio-controls input[type="range"] {
+    -webkit-appearance: none; appearance: none;
+    width: 80px; height: 4px;
+    background: var(--border); border-radius: 2px;
+    margin: 0;
+  }
+  .audio-controls input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: var(--coral); cursor: pointer;
+  }
+  .audio-controls input[type="range"]::-moz-range-thumb {
+    width: 16px; height: 16px; border-radius: 50%; border: 0;
+    background: var(--coral); cursor: pointer;
+  }
+  .sound-select {
+    font: inherit; font-size: 12px;
+    color: var(--ink-soft);
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 6px;
+    max-width: 140px;
+  }
+  .sound-select:active { background: var(--panel-2); }
   .test-buzz-btn {
     width: 36px; height: 36px;
     display: inline-flex; align-items: center; justify-content: center;
@@ -91,20 +124,6 @@
   .diag .row { display: flex; justify-content: space-between; gap: 8px; }
   .diag .ok { color: #4a7a3a; }
   .diag .bad { color: var(--coral); }
-  .vol-control input[type="range"] {
-    -webkit-appearance: none; appearance: none;
-    width: 90px; height: 4px; background: var(--border); border-radius: 2px;
-    margin: 0;
-  }
-  .vol-control input[type="range"]::-webkit-slider-thumb {
-    -webkit-appearance: none; appearance: none;
-    width: 16px; height: 16px; border-radius: 50%;
-    background: var(--coral); cursor: pointer;
-  }
-  .vol-control input[type="range"]::-moz-range-thumb {
-    width: 16px; height: 16px; border-radius: 50%; border: 0;
-    background: var(--coral); cursor: pointer;
-  }
 
   /* ---------- Timer card (sticky) ---------- */
   .timer {
@@ -115,7 +134,47 @@
     box-shadow: var(--shadow-md);
     margin-bottom: 18px;
     text-align: center;
+    transition: padding 180ms ease;
   }
+  /* Minimized: a single thin row [countdown] [segname] [controls] */
+  .timer.minimized {
+    padding: 8px 14px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    text-align: left;
+  }
+  .timer.minimized .timer-label,
+  .timer.minimized .next-up,
+  .timer.minimized .totals,
+  .timer.minimized .advance-toggle { display: none; }
+  .timer.minimized .countdown {
+    font-size: 28px; line-height: 1;
+    margin: 0;
+    order: 1;
+    flex-shrink: 0;
+    letter-spacing: -0.01em;
+  }
+  .timer.minimized .timer-segname {
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 13px; margin: 0;
+    color: var(--ink-soft);
+    order: 2; flex: 1; min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: center;
+  }
+  .timer.minimized .controls {
+    order: 3;
+    gap: 6px;
+    margin: 0;
+    flex-shrink: 0;
+  }
+  .timer.minimized .ctrl-btn  { width: 32px; height: 32px; }
+  .timer.minimized .ctrl-btn svg { width: 14px; height: 14px; }
+  .timer.minimized .ctrl-play { width: 40px; height: 40px; }
+  .timer.minimized .ctrl-play svg { width: 18px; height: 18px; }
   .timer.finished { background: var(--coral-soft); border-color: var(--coral); }
   .timer-label {
     font-size: 11px; color: var(--muted);
@@ -323,7 +382,7 @@
 <main>
   <header class="app-header">
     <h1 class="app-title">Mat Time</h1>
-    <div class="vol-control">
+    <div class="audio-controls">
       <button type="button" id="testBuzzBtn" class="test-buzz-btn" aria-label="Test buzzer">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
@@ -331,6 +390,14 @@
         </svg>
       </button>
       <input id="volSlider" type="range" min="0" max="100" step="1" value="80" aria-label="Volume">
+      <select id="soundSelect" class="sound-select" aria-label="Buzzer sound">
+        <option value="scoreboard">Scoreboard buzzer</option>
+        <option value="bell">Boxing bell</option>
+        <option value="airhorn">Air horn</option>
+        <option value="whistle">Whistle</option>
+        <option value="beep">Single beep</option>
+        <option value="triple">Triple beep</option>
+      </select>
     </div>
   </header>
 
@@ -431,6 +498,8 @@ const state = (() => {
           })),
           volume: typeof parsed.volume === 'number' ? parsed.volume : 0.8,
           autoAdvance: parsed.autoAdvance !== false,
+          // Validated lazily against BuzzerSounds in start()/changeSound()
+          buzzerSound: (typeof parsed.buzzerSound === 'string' && parsed.buzzerSound) || 'scoreboard',
         };
       }
     }
@@ -447,6 +516,7 @@ function cloneDefault() {
     })),
     volume: DEFAULT_PLAN.volume,
     autoAdvance: true,
+    buzzerSound: 'scoreboard',
   };
 }
 
@@ -460,6 +530,7 @@ function saveState() {
         segments: state.segments,
         volume: state.volume,
         autoAdvance: state.autoAdvance,
+        buzzerSound: state.buzzerSound,
         lastModified: Date.now(),
       }));
     } catch (e) { console.warn('Save failed', e); }
@@ -501,48 +572,160 @@ function sumSeconds(segs) {
 // real scoreboard-buzzer WAV in JS at page load and keep an <audio> element
 // primed so we can fire it from inside any user gesture as a fallback.
 
-function generateBuzzWav(durationSec, sampleRate) {
-  durationSec = durationSec || 2.0;
-  sampleRate = sampleRate || 44100;
+// Helper: build a mono 16-bit PCM WAV from a sample function.
+// sampleFn(t, i, sampleRate, totalSamples) returns a float in [-1, 1].
+function makeWav(durationSec, sampleRate, sampleFn) {
   const samples = Math.floor(durationSec * sampleRate);
-  const channels = 1, bps = 2;
-  const blockAlign = channels * bps;
+  const bps = 2;
+  const blockAlign = 1 * bps;
   const byteRate = sampleRate * blockAlign;
   const dataSize = samples * blockAlign;
   const buf = new ArrayBuffer(44 + dataSize);
   const v = new DataView(buf);
   function writeStr(off, s) { for (let i = 0; i < s.length; i++) v.setUint8(off + i, s.charCodeAt(i)); }
-  writeStr(0, 'RIFF');
-  v.setUint32(4, 36 + dataSize, true);
-  writeStr(8, 'WAVE');
-  writeStr(12, 'fmt ');
+  writeStr(0, 'RIFF');     v.setUint32(4, 36 + dataSize, true);
+  writeStr(8, 'WAVE');     writeStr(12, 'fmt ');
   v.setUint32(16, 16, true);
-  v.setUint16(20, 1, true);            // PCM
-  v.setUint16(22, channels, true);
+  v.setUint16(20, 1, true); v.setUint16(22, 1, true);
   v.setUint32(24, sampleRate, true);
   v.setUint32(28, byteRate, true);
   v.setUint16(32, blockAlign, true);
-  v.setUint16(34, 16, true);           // bits
-  writeStr(36, 'data');
-  v.setUint32(40, dataSize, true);
-
-  // Two slightly detuned naive sawtooths at ~165 / 169 Hz with attack/release
-  // envelope. Aliasing is welcome — real scoreboard horns are gritty.
-  const f1 = 165, f2 = 169;
-  const fadeIn = Math.floor(0.025 * sampleRate);
-  const fadeOut = Math.floor(0.20 * sampleRate);
+  v.setUint16(34, 16, true);
+  writeStr(36, 'data');    v.setUint32(40, dataSize, true);
   for (let i = 0; i < samples; i++) {
     const t = i / sampleRate;
-    let env = 1;
-    if (i < fadeIn) env = i / fadeIn;
-    else if (i > samples - fadeOut) env = (samples - i) / fadeOut;
-    const ph1 = (t * f1) % 1;
-    const ph2 = (t * f2) % 1;
-    let s = ((2 * ph1 - 1) + (2 * ph2 - 1)) * 0.22 * env;
+    let s = sampleFn(t, i, sampleRate, samples);
     if (s > 1) s = 1; else if (s < -1) s = -1;
     v.setInt16(44 + i * 2, Math.floor(s * 32767), true);
   }
   return buf;
+}
+
+// Scoreboard horn: two detuned naive sawtooths at ~165/169 Hz, gritty.
+function generateBuzzWav(durationSec, sampleRate) {
+  durationSec = durationSec || 2.0;
+  sampleRate  = sampleRate  || 44100;
+  const samples = Math.floor(durationSec * sampleRate);
+  const fadeIn  = Math.floor(0.025 * sampleRate);
+  const fadeOut = Math.floor(0.20  * sampleRate);
+  return makeWav(durationSec, sampleRate, (t, i) => {
+    let env = 1;
+    if (i < fadeIn) env = i / fadeIn;
+    else if (i > samples - fadeOut) env = (samples - i) / fadeOut;
+    const ph1 = (t * 165) % 1;
+    const ph2 = (t * 169) % 1;
+    return ((2 * ph1 - 1) + (2 * ph2 - 1)) * 0.22 * env;
+  });
+}
+
+// Boxing bell: sum of decaying sine partials over a 700 Hz fundamental.
+// Inharmonic ratios (≈ 0.5, 1, 2, 3, 4.7, 6) give a real bell-like shimmer.
+function generateBellWav(durationSec, sampleRate) {
+  durationSec = durationSec || 2.5;
+  sampleRate  = sampleRate  || 44100;
+  const f0 = 700;
+  const partials = [
+    { r: 0.5, a: 0.35, τ: 0.7 },
+    { r: 1.0, a: 1.00, τ: 0.55 },
+    { r: 2.0, a: 0.55, τ: 0.40 },
+    { r: 3.0, a: 0.30, τ: 0.32 },
+    { r: 4.7, a: 0.22, τ: 0.26 },
+    { r: 6.0, a: 0.14, τ: 0.20 },
+  ];
+  return makeWav(durationSec, sampleRate, (t) => {
+    let s = 0;
+    for (const p of partials) {
+      s += Math.sin(2 * Math.PI * f0 * p.r * t) * p.a * Math.exp(-t / p.τ);
+    }
+    const fadeIn = 0.004;
+    if (t < fadeIn) s *= t / fadeIn;
+    return s * 0.30;
+  });
+}
+
+// Whistle: high pure tone with vibrato. Phase-accumulated FM for clean sound.
+function generateWhistleWav(durationSec, sampleRate) {
+  durationSec = durationSec || 1.5;
+  sampleRate  = sampleRate  || 44100;
+  const f = 2500, vibFreq = 5.5, vibDepth = 28;
+  let phase = 0;
+  const dt = 1 / sampleRate;
+  const fadeIn = 0.04, fadeOut = 0.12;
+  return makeWav(durationSec, sampleRate, (t) => {
+    const instFreq = f + Math.sin(2 * Math.PI * vibFreq * t) * vibDepth;
+    phase += 2 * Math.PI * instFreq * dt;
+    let s = Math.sin(phase);
+    if (t < fadeIn) s *= t / fadeIn;
+    else if (t > durationSec - fadeOut) s *= (durationSec - t) / fadeOut;
+    return s * 0.40;
+  });
+}
+
+// Air horn: two slightly-detuned square waves at low pitch. Honks.
+function generateAirhornWav(durationSec, sampleRate) {
+  durationSec = durationSec || 2.0;
+  sampleRate  = sampleRate  || 44100;
+  const f1 = 200, f2 = 207;
+  const fadeIn = 0.015, fadeOut = 0.15;
+  return makeWav(durationSec, sampleRate, (t) => {
+    const sq1 = ((t * f1) % 1) < 0.5 ?  1 : -1;
+    const sq2 = ((t * f2) % 1) < 0.5 ?  1 : -1;
+    let s = (sq1 + sq2) * 0.18;
+    if (t < fadeIn) s *= t / fadeIn;
+    else if (t > durationSec - fadeOut) s *= (durationSec - t) / fadeOut;
+    return s;
+  });
+}
+
+// Single beep: clean 800 Hz sine, ~300 ms.
+function generateBeepWav(durationSec, sampleRate) {
+  durationSec = durationSec || 0.32;
+  sampleRate  = sampleRate  || 44100;
+  const f = 800;
+  const fade = 0.015;
+  return makeWav(durationSec, sampleRate, (t) => {
+    let s = Math.sin(2 * Math.PI * f * t);
+    if (t < fade) s *= t / fade;
+    else if (t > durationSec - fade) s *= (durationSec - t) / fade;
+    return s * 0.50;
+  });
+}
+
+// Triple beep: three 150 ms beeps with 100 ms gaps, total ~0.85 s.
+function generateTripleBeepWav(durationSec, sampleRate) {
+  durationSec = durationSec || 0.85;
+  sampleRate  = sampleRate  || 44100;
+  const f = 900, beepDur = 0.15, gap = 0.10, period = beepDur + gap;
+  const fade = 0.012;
+  return makeWav(durationSec, sampleRate, (t) => {
+    const beepIdx = Math.floor(t / period);
+    if (beepIdx > 2) return 0;
+    const local = t - beepIdx * period;
+    if (local >= beepDur) return 0;
+    let s = Math.sin(2 * Math.PI * f * t);
+    if (local < fade) s *= local / fade;
+    else if (local > beepDur - fade) s *= (beepDur - local) / fade;
+    return s * 0.48;
+  });
+}
+
+// Catalog of available buzzer sounds. URLs are lazily generated and cached.
+const BuzzerSounds = {
+  scoreboard: { label: 'Scoreboard buzzer', gen: () => generateBuzzWav(2.0)      },
+  bell:       { label: 'Boxing bell',       gen: () => generateBellWav(2.5)      },
+  airhorn:    { label: 'Air horn',          gen: () => generateAirhornWav(2.0)   },
+  whistle:    { label: 'Whistle',           gen: () => generateWhistleWav(1.5)   },
+  beep:       { label: 'Single beep',       gen: () => generateBeepWav(0.32)     },
+  triple:     { label: 'Triple beep',       gen: () => generateTripleBeepWav(0.85)},
+};
+const _buzzerURLCache = Object.create(null);
+function getBuzzerSoundURL(key) {
+  if (!BuzzerSounds[key]) key = 'scoreboard';
+  if (!_buzzerURLCache[key]) {
+    const buf = BuzzerSounds[key].gen();
+    _buzzerURLCache[key] = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+  }
+  return _buzzerURLCache[key];
 }
 
 // 30 seconds of -60 dB 50 Hz sine. Inaudible but registers as "audio playing"
@@ -602,9 +785,7 @@ function generateSilentLoopWav(durationSec, sampleRate) {
 
 const Buzzer = (() => {
   const silentBuf = generateSilentLoopWav(30, 44100);
-  const buzzBuf   = generateBuzzWav(2.0, 44100);
   const silentURL = URL.createObjectURL(new Blob([silentBuf], { type: 'audio/wav' }));
-  const buzzURL   = URL.createObjectURL(new Blob([buzzBuf],   { type: 'audio/wav' }));
 
   function makeEl(src, vol) {
     const el = new Audio();
@@ -619,7 +800,10 @@ const Buzzer = (() => {
   // -60 dB sine on infinite loop — establishes the iOS playback session.
   const silentEl = makeEl(silentURL, 1.0);
   // Buzz WAV on infinite loop at volume 0. Volume gets bumped to fire a buzz.
-  const buzzEl   = makeEl(buzzURL,   0.0);
+  // Initial src is set lazily on first .start() so the saved sound choice
+  // from localStorage is respected.
+  const buzzEl   = makeEl(silentURL, 0.0);  // placeholder; real src set in start()
+  let currentSoundKey = null;
 
   let active = false;
   let unmuteEndTimeout = null;
@@ -643,6 +827,12 @@ const Buzzer = (() => {
     active = true;
     tele.silentError = '';
     tele.buzzError = '';
+    // Make sure buzzEl is playing the user's currently selected sound.
+    const wantKey = state.buzzerSound || 'scoreboard';
+    if (currentSoundKey !== wantKey) {
+      buzzEl.src = getBuzzerSoundURL(wantKey);
+      currentSoundKey = wantKey;
+    }
     const ps = silentEl.play();
     if (ps && ps.catch) ps.catch((e) => {
       tele.silentResult = 'rejected';
@@ -655,6 +845,25 @@ const Buzzer = (() => {
       tele.buzzError  = String(e && e.message || e);
       console.warn('[Mat Time] buzz.play() rejected:', e);
     });
+  }
+
+  // Switch which sound the buzz element loops. Must be called inside a user
+  // gesture because changing src + play() requires gesture permission on iOS.
+  function changeSound(soundKey) {
+    if (!BuzzerSounds[soundKey]) return;
+    currentSoundKey = soundKey;
+    buzzEl.src = getBuzzerSoundURL(soundKey);
+    buzzEl.volume = 0;
+    if (unmuteEndTimeout) { clearTimeout(unmuteEndTimeout); unmuteEndTimeout = null; }
+    // Re-play inside the gesture so iOS accepts the new src
+    const p = buzzEl.play();
+    if (p && p.catch) p.catch((e) => {
+      tele.buzzResult = 'rejected';
+      tele.buzzError  = String(e && e.message || e);
+      console.warn('[Mat Time] buzz.play() after src change rejected:', e);
+    });
+    // Also ensure the silent session is up
+    if (!active) start();
   }
 
   // Make the buzz audible for ~2 seconds. Works from setTimeout / locked
@@ -679,7 +888,7 @@ const Buzzer = (() => {
 
   function isActive() { return active; }
 
-  return { start, stop, fire, isActive, telemetry: tele, silentEl, buzzEl };
+  return { start, stop, fire, changeSound, isActive, telemetry: tele, silentEl, buzzEl };
 })();
 
 // ---------- DIAGNOSTIC READOUT ----------
@@ -1275,6 +1484,26 @@ vs.addEventListener('input', () => {
   // needs to make a buzz audible.
   saveState();
 });
+
+// Buzzer sound selector
+const soundSelect = $('soundSelect');
+if (state.buzzerSound && BuzzerSounds[state.buzzerSound]) {
+  soundSelect.value = state.buzzerSound;
+} else {
+  state.buzzerSound = 'scoreboard';
+  soundSelect.value = 'scoreboard';
+}
+soundSelect.addEventListener('change', () => {
+  const key = soundSelect.value;
+  if (!BuzzerSounds[key]) return;
+  state.buzzerSound = key;
+  saveState();
+  // Switch the buzz audio source AND play a preview — both inside this
+  // user-gesture event so iOS accepts the play() call.
+  Buzzer.changeSound(key);
+  Buzzer.fire(state.volume);
+  flashToast('Buzzer: ' + BuzzerSounds[key].label);
+});
 // Tap the speaker icon button to test the buzzer.
 // Crucial: do NOT await anything before calling Timer.testBuzz() — on iOS, the
 // audio-context unlock must happen in the synchronous call stack of the user
@@ -1455,6 +1684,29 @@ if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   });
 }
+
+// ---------- SCROLL COLLAPSE FOR TIMER CARD ----------
+// When the user scrolls down past ~80px, shrink the sticky timer card so
+// more of the plan editor is visible. Snaps back to full size near the top.
+(() => {
+  const timerCard = $('timerCard');
+  let minimized = false;
+  let raf = null;
+  function update() {
+    raf = null;
+    const y = window.scrollY || window.pageYOffset || 0;
+    if (!minimized && y > 80) {
+      timerCard.classList.add('minimized');
+      minimized = true;
+    } else if (minimized && y < 30) {
+      timerCard.classList.remove('minimized');
+      minimized = false;
+    }
+  }
+  window.addEventListener('scroll', () => {
+    if (raf === null) raf = requestAnimationFrame(update);
+  }, { passive: true });
+})();
 
 // ---------- INITIAL RENDER ----------
 render();
