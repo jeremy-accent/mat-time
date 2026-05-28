@@ -162,6 +162,30 @@
   .next-up strong { color: var(--ink-soft); font-weight: 500; }
   .totals { font-size: 12px; color: var(--muted); margin-top: 4px; font-variant-numeric: tabular-nums; }
 
+  /* Auto-advance toggle (sits below the controls in the timer card) */
+  .advance-toggle {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 5px 12px 5px 8px;
+    border-radius: 999px;
+    background: var(--panel-2);
+    font-size: 12px; color: var(--ink-soft);
+    margin-top: 6px;
+    transition: background 100ms ease;
+    border: 1px solid transparent;
+  }
+  .advance-toggle:active { background: var(--border-soft); }
+  .advance-toggle .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #7A9670;  /* green when auto-advance on */
+    transition: background 100ms ease;
+  }
+  .advance-toggle[data-on="false"] {
+    background: var(--coral-soft);
+    border-color: var(--coral);
+    color: var(--coral);
+  }
+  .advance-toggle[data-on="false"] .dot { background: var(--coral); }
+
   /* ---------- Editor ---------- */
   .editor-head {
     display: flex; justify-content: space-between; align-items: center;
@@ -331,6 +355,10 @@
     </div>
     <div class="next-up" id="nextUp">&nbsp;</div>
     <div class="totals" id="totals">0:00 / 0:00</div>
+    <button type="button" class="advance-toggle" id="advanceToggle" data-on="true" aria-label="Toggle auto-advance">
+      <span class="dot" aria-hidden="true"></span>
+      <span class="label" id="advanceLabel">Auto-advance</span>
+    </button>
   </section>
 
   <!-- ===== EDITOR ===== -->
@@ -402,6 +430,7 @@ const state = (() => {
             seconds: Math.max(1, Math.min(3 * 60 * 60, parseInt(s.seconds, 10) || 60)),
           })),
           volume: typeof parsed.volume === 'number' ? parsed.volume : 0.8,
+          autoAdvance: parsed.autoAdvance !== false,
         };
       }
     }
@@ -417,6 +446,7 @@ function cloneDefault() {
       seconds: s.seconds,
     })),
     volume: DEFAULT_PLAN.volume,
+    autoAdvance: true,
   };
 }
 
@@ -429,6 +459,7 @@ function saveState() {
         version: 1,
         segments: state.segments,
         volume: state.volume,
+        autoAdvance: state.autoAdvance,
         lastModified: Date.now(),
       }));
     } catch (e) { console.warn('Save failed', e); }
@@ -514,6 +545,70 @@ function generateBuzzWav(durationSec, sampleRate) {
   return buf;
 }
 
+// 30 seconds of -60 dB 50 Hz sine. Inaudible but registers as "audio playing"
+// to iOS, which keeps the audio session active AND keeps the JS thread alive
+// in the background (so setTimeout fires through a locked screen).
+function generateSilentLoopWav(durationSec, sampleRate) {
+  durationSec = durationSec || 30;
+  sampleRate = sampleRate || 44100;
+  const samples = Math.floor(durationSec * sampleRate);
+  const channels = 1, bps = 2;
+  const blockAlign = channels * bps;
+  const byteRate = sampleRate * blockAlign;
+  const dataSize = samples * blockAlign;
+  const buf = new ArrayBuffer(44 + dataSize);
+  const v = new DataView(buf);
+  function writeStr(off, s) { for (let i = 0; i < s.length; i++) v.setUint8(off + i, s.charCodeAt(i)); }
+  writeStr(0, 'RIFF');
+  v.setUint32(4, 36 + dataSize, true);
+  writeStr(8, 'WAVE');
+  writeStr(12, 'fmt ');
+  v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true);
+  v.setUint16(22, channels, true);
+  v.setUint32(24, sampleRate, true);
+  v.setUint32(28, byteRate, true);
+  v.setUint16(32, blockAlign, true);
+  v.setUint16(34, 16, true);
+  writeStr(36, 'data');
+  v.setUint32(40, dataSize, true);
+  for (let i = 0; i < samples; i++) {
+    const t = i / sampleRate;
+    // -60 dB amplitude (0.001) at 50 Hz — inaudible on phone speakers
+    const s = Math.sin(2 * Math.PI * 50 * t) * 0.001;
+    v.setInt16(44 + i * 2, Math.floor(s * 32767), true);
+  }
+  return buf;
+}
+
+// Keeps iOS audio session active + keeps JS running when screen is locked.
+const SilentLoop = (() => {
+  const buf = generateSilentLoopWav(30, 44100);
+  const url = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+  const el = new Audio();
+  el.src = url;
+  el.preload = 'auto';
+  el.loop = true;
+  el.volume = 1.0;     // amplitude is already tiny inside the WAV itself
+  el.playsInline = true;
+  el.setAttribute('playsinline', '');
+  let playing = false;
+  el.addEventListener('playing', () => { playing = true; });
+  el.addEventListener('pause',   () => { playing = false; });
+  return {
+    start() {
+      try { el.currentTime = 0; } catch (_) {}
+      const p = el.play();
+      if (p && typeof p.then === 'function') {
+        p.catch((e) => console.warn('[Mat Time] silent loop play() failed:', e));
+      }
+    },
+    stop() { try { el.pause(); } catch (_) {} },
+    isPlaying() { return playing; },
+    element: el,
+  };
+})();
+
 const HTMLAudioBuzz = (() => {
   const buf = generateBuzzWav(2.0, 44100);
   const url = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
@@ -578,37 +673,27 @@ function renderDiag(label) {
 // ---------- TIMER ENGINE ----------
 const Timer = {
   audioCtx: null,
-  silentLoop: null,
-  scheduledBuzzes: [],   // { time, nodes: [] }
+  scheduledBuzzes: [],     // Web Audio scheduled buzz nodes (desktop path)
+  buzzTimeouts: [],        // setTimeout IDs for HTMLAudio buzz playback (iOS path)
   wakeLock: null,
-  state: 'idle',         // 'idle' | 'running' | 'paused' | 'finished'
-  anchor: 0,             // audioCtx.currentTime when plan virtually started
+  state: 'idle',           // 'idle' | 'running' | 'paused' | 'finished'
+  anchorMs: 0,             // performance.now() at the virtual plan start
   currentIndex: 0,
   elapsedInSegment: 0,
   rafHandle: null,
 
-  async ensureAudio() {
+  // Best-effort: create + resume Web Audio. Must be called from a gesture.
+  // Used for the desktop buzz path; iOS often silences the output even when
+  // state === 'running', so we never rely on Web Audio alone.
+  ensureWebAudio() {
     if (!this.audioCtx) {
       const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
       this.audioCtx = new Ctx();
     }
     if (this.audioCtx.state === 'suspended') {
-      try { await this.audioCtx.resume(); } catch (_) {}
+      this.audioCtx.resume().catch(() => {});
     }
-    if (!this.silentLoop) this.startSilentLoop();
-  },
-
-  // Inaudible buffer source keeps iOS' audio session alive while screen is locked
-  startSilentLoop() {
-    const ctx = this.audioCtx;
-    const buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * 2), ctx.sampleRate);
-    // Buffer is zero by default → silent
-    const src = ctx.createBufferSource();
-    src.buffer = buf;
-    src.loop = true;
-    src.connect(ctx.destination);
-    src.start();
-    this.silentLoop = src;
   },
 
   setupMediaSession() {
@@ -642,12 +727,18 @@ const Timer = {
     }
   },
 
-  async play() {
+  play() {
     if (this.state === 'running') return;
-    await this.ensureAudio();
-    const before = this.cumBefore(this.currentIndex) + this.elapsedInSegment;
-    this.anchor = this.audioCtx.currentTime - before;
-    this.scheduleAllBuzzes();
+    // Synchronous within the gesture, for iOS audio unlock.
+    this.ensureWebAudio();
+    SilentLoop.start();              // keeps iOS session + JS alive when locked
+
+    const beforeMs = (this.cumBefore(this.currentIndex) + this.elapsedInSegment) * 1000;
+    this.anchorMs = performance.now() - beforeMs;
+
+    this.scheduleAllBuzzesWebAudio();   // desktop audible path
+    this.scheduleAllBuzzesTimeouts();   // iOS audible path + advance logic
+
     this.state = 'running';
     this.requestWakeLock();
     this.setupMediaSession();
@@ -657,12 +748,14 @@ const Timer = {
 
   pause() {
     if (this.state !== 'running') return;
-    const elapsedTotal = this.audioCtx.currentTime - this.anchor;
+    const elapsedTotal = (performance.now() - this.anchorMs) / 1000;
     const loc = this.locateAt(elapsedTotal);
     this.currentIndex = loc.index;
     this.elapsedInSegment = loc.elapsedInSeg;
     this.cancelScheduledBuzzes();
+    this.clearBuzzTimeouts();
     this.releaseWakeLock();
+    SilentLoop.stop();
     this.state = 'paused';
     if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
     cancelAnimationFrame(this.rafHandle);
@@ -706,10 +799,10 @@ const Timer = {
   },
 
   reschedule() {
-    if (!this.audioCtx) return;
-    const before = this.cumBefore(this.currentIndex) + this.elapsedInSegment;
-    this.anchor = this.audioCtx.currentTime - before;
-    this.scheduleAllBuzzes();
+    const beforeMs = (this.cumBefore(this.currentIndex) + this.elapsedInSegment) * 1000;
+    this.anchorMs = performance.now() - beforeMs;
+    this.scheduleAllBuzzesWebAudio();
+    this.scheduleAllBuzzesTimeouts();
   },
 
   // Called when the plan structure changes (edits, adds, deletes, reorders)
@@ -723,8 +816,8 @@ const Timer = {
   },
 
   elapsedInSegmentNow() {
-    if (this.state !== 'running' || !this.audioCtx) return this.elapsedInSegment;
-    const elapsedTotal = this.audioCtx.currentTime - this.anchor;
+    if (this.state !== 'running') return this.elapsedInSegment;
+    const elapsedTotal = (performance.now() - this.anchorMs) / 1000;
     const loc = this.locateAt(elapsedTotal);
     return loc.elapsedInSeg;
   },
@@ -749,19 +842,82 @@ const Timer = {
     return { index: state.segments.length - 1, elapsedInSeg: state.segments[state.segments.length - 1].seconds, past: true };
   },
 
-  scheduleAllBuzzes() {
+  // Pre-schedule Web Audio buzzes for the desktop path. iOS often silences
+  // these but the desktop browser plays them clearly.
+  scheduleAllBuzzesWebAudio() {
     this.cancelScheduledBuzzes();
     if (!this.audioCtx) return;
     const ctx = this.audioCtx;
     const segs = state.segments;
+    const nowMs = performance.now();
     let cumEnd = 0;
     for (let i = 0; i < segs.length; i++) {
       cumEnd += segs[i].seconds;
-      const buzzTime = this.anchor + cumEnd;
-      if (buzzTime > ctx.currentTime + 0.05) {
-        this.scheduleBuzzAt(buzzTime);
+      const fireAtMs = this.anchorMs + cumEnd * 1000;
+      const delaySec = (fireAtMs - nowMs) / 1000;
+      if (delaySec > 0.05) {
+        this.scheduleBuzzAt(ctx.currentTime + delaySec);
       }
     }
+  },
+
+  // Schedule setTimeout-driven segment-end events. Each event fires the
+  // HTMLAudio buzz (audible on iOS) and runs the auto/manual-advance logic.
+  // setTimeout fires reliably on iOS PWAs while the SilentLoop is playing.
+  scheduleAllBuzzesTimeouts() {
+    this.clearBuzzTimeouts();
+    const segs = state.segments;
+    const nowMs = performance.now();
+    let cumEnd = 0;
+    for (let i = 0; i < segs.length; i++) {
+      cumEnd += segs[i].seconds;
+      const fireAtMs = this.anchorMs + cumEnd * 1000;
+      const delayMs = fireAtMs - nowMs;
+      if (delayMs > 30) {
+        const segIdx = i;
+        const id = setTimeout(() => this.onSegmentEnd(segIdx), delayMs);
+        this.buzzTimeouts.push(id);
+      }
+    }
+  },
+
+  clearBuzzTimeouts() {
+    for (const id of this.buzzTimeouts) clearTimeout(id);
+    this.buzzTimeouts = [];
+  },
+
+  // Fires when a segment's end time is reached (via setTimeout).
+  // Plays the audible buzz and decides whether to auto-advance or pause.
+  onSegmentEnd(segIdx) {
+    HTMLAudioBuzz.fire(state.volume);
+
+    const isLast = segIdx >= state.segments.length - 1;
+    if (isLast) {
+      // The display loop will detect "past end" and call finish() next tick;
+      // we don't pause here so the final buzz can fully ring out.
+      return;
+    }
+
+    if (state.autoAdvance !== false) {
+      // Auto mode: the display loop naturally rolls over to the next segment.
+      // Nothing extra to do here.
+      return;
+    }
+
+    // Manual mode: pause right at the segment boundary, ready to start next.
+    this.clearBuzzTimeouts();
+    this.cancelScheduledBuzzes();
+    this.releaseWakeLock();
+    cancelAnimationFrame(this.rafHandle);
+    SilentLoop.stop();
+    this.state = 'paused';
+    this.currentIndex = segIdx + 1;
+    this.elapsedInSegment = 0;
+    if ('mediaSession' in navigator) {
+      try { navigator.mediaSession.playbackState = 'paused'; } catch (_) {}
+    }
+    render();
+    flashToast('Ready: "' + state.segments[segIdx + 1].name + '" · tap ▶');
   },
 
   // Scoreboard horn: 2 detuned sawtooth oscillators, ~2s, with envelope and filters
@@ -821,22 +977,11 @@ const Timer = {
   // generated WAV — on iOS, the latter is much more reliably routed.
   testBuzz() {
     try {
-      // --- Web Audio path ---
-      if (!this.audioCtx) {
-        const Ctx = window.AudioContext || window.webkitAudioContext;
-        if (Ctx) this.audioCtx = new Ctx();
-      }
+      this.ensureWebAudio();
       if (this.audioCtx) {
-        if (this.audioCtx.state === 'suspended') {
-          this.audioCtx.resume().catch((e) => console.warn('[Mat Time] resume failed', e));
-        }
-        if (!this.silentLoop) this.startSilentLoop();
         this.scheduleBuzzAt(this.audioCtx.currentTime + 0.05);
       }
-
-      // --- HTMLAudioElement fallback path (iOS-reliable) ---
       HTMLAudioBuzz.fire(state.volume);
-
       console.log('[Mat Time] test buzz fired · vol=' + state.volume +
                   ' · ctxState=' + (this.audioCtx ? this.audioCtx.state : 'n/a'));
       return true;
@@ -856,8 +1001,7 @@ const Timer = {
   },
 
   updateDisplay() {
-    if (!this.audioCtx) return;
-    const elapsedTotal = this.audioCtx.currentTime - this.anchor;
+    const elapsedTotal = (performance.now() - this.anchorMs) / 1000;
     const total = sumSeconds(state.segments);
     if (elapsedTotal >= total) {
       this.finish();
@@ -896,7 +1040,9 @@ const Timer = {
     this.currentIndex = state.segments.length - 1;
     this.elapsedInSegment = state.segments[this.currentIndex].seconds;
     this.cancelScheduledBuzzes();
+    this.clearBuzzTimeouts();
     this.releaseWakeLock();
+    SilentLoop.stop();
     if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
     cancelAnimationFrame(this.rafHandle);
     render();
@@ -904,7 +1050,9 @@ const Timer = {
 
   reset() {
     this.cancelScheduledBuzzes();
+    this.clearBuzzTimeouts();
     this.releaseWakeLock();
+    SilentLoop.stop();
     cancelAnimationFrame(this.rafHandle);
     this.state = 'idle';
     this.currentIndex = 0;
@@ -1058,6 +1206,24 @@ $('resetBtn').addEventListener('click', () => {
   Timer.reset();
   saveState();
   Timer.onPlanChanged();
+});
+
+// Auto-advance toggle
+const advanceToggle = $('advanceToggle');
+const advanceLabel = $('advanceLabel');
+function renderAdvanceToggle() {
+  const on = state.autoAdvance !== false;
+  advanceToggle.dataset.on = on ? 'true' : 'false';
+  advanceLabel.textContent = on ? 'Auto-advance' : 'Manual · tap ▶ after buzzer';
+}
+renderAdvanceToggle();
+advanceToggle.addEventListener('click', () => {
+  state.autoAdvance = !(state.autoAdvance !== false);
+  renderAdvanceToggle();
+  saveState();
+  // If the timer is currently running, no need to reschedule — the
+  // setTimeout-driven onSegmentEnd reads state.autoAdvance at fire time.
+  flashToast(state.autoAdvance ? 'Auto-advance ON' : 'Manual mode — timer will pause at each buzzer');
 });
 
 // Volume
