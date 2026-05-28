@@ -2,7 +2,7 @@
 // Cache-first for the app shell so the timer works offline at the gym.
 // Bump CACHE_NAME to ship updates.
 
-const CACHE_NAME = 'mat-time-v1';
+const CACHE_NAME = 'mat-time-v2';
 const ASSETS = [
   './',
   './index.html',

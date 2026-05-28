@@ -63,7 +63,16 @@
     letter-spacing: -0.01em;
   }
   .vol-control { display: flex; align-items: center; gap: 6px; color: var(--muted); }
-  .vol-control svg { width: 18px; height: 18px; }
+  .vol-control svg { width: 18px; height: 18px; pointer-events: none; }
+  .test-buzz-btn {
+    width: 36px; height: 36px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 10px;
+    color: var(--muted);
+    transition: background 100ms ease, color 100ms ease, transform 80ms ease;
+  }
+  .test-buzz-btn:active { background: var(--panel-2); color: var(--coral); transform: scale(0.93); }
+  .test-buzz-btn.flash { background: var(--coral-soft); color: var(--coral); }
   .vol-control input[type="range"] {
     -webkit-appearance: none; appearance: none;
     width: 90px; height: 4px; background: var(--border); border-radius: 2px;
@@ -272,13 +281,15 @@
 <main>
   <header class="app-header">
     <h1 class="app-title">Mat Time</h1>
-    <label class="vol-control" aria-label="Volume">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
-        <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
-      </svg>
-      <input id="volSlider" type="range" min="0" max="100" step="1" value="80">
-    </label>
+    <div class="vol-control">
+      <button type="button" id="testBuzzBtn" class="test-buzz-btn" aria-label="Test buzzer">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+          <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+        </svg>
+      </button>
+      <input id="volSlider" type="range" min="0" max="100" step="1" value="80" aria-label="Volume">
+    </div>
   </header>
 
   <!-- ===== TIMER ===== -->
@@ -670,10 +681,31 @@ const Timer = {
     this.scheduledBuzzes = [];
   },
 
-  // Test the buzzer without running the plan (used on volume change)
-  async testBuzz() {
-    await this.ensureAudio();
-    this.scheduleBuzzAt(this.audioCtx.currentTime + 0.05);
+  // Test the buzzer. Must be invoked synchronously inside a user-gesture
+  // handler — iOS only allows AudioContext.resume() to escape the suspended
+  // state if the call originates inside that gesture's call stack.
+  testBuzz() {
+    try {
+      if (!this.audioCtx) {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) { console.warn('[Mat Time] Web Audio not supported'); return false; }
+        this.audioCtx = new Ctx();
+      }
+      // Fire-and-forget resume — must be called synchronously in the gesture.
+      if (this.audioCtx.state === 'suspended') {
+        this.audioCtx.resume().catch((e) => console.warn('[Mat Time] resume failed', e));
+      }
+      if (!this.silentLoop) this.startSilentLoop();
+      const ctxNow = this.audioCtx.currentTime;
+      this.scheduleBuzzAt(ctxNow + 0.05);
+      console.log('[Mat Time] test buzz scheduled · vol=' + state.volume +
+                  ' · ctxState=' + this.audioCtx.state +
+                  ' · ctxTime=' + ctxNow.toFixed(2));
+      return true;
+    } catch (e) {
+      console.error('[Mat Time] testBuzz failed:', e);
+      return false;
+    }
   },
 
   startDisplayLoop() {
@@ -897,8 +929,20 @@ vs.addEventListener('input', () => {
   state.volume = Math.max(0, Math.min(1, vs.valueAsNumber / 100));
   saveState();
 });
-// Tap the volume label to test buzzer
-document.querySelector('.vol-control svg').addEventListener('click', () => Timer.testBuzz());
+// Tap the speaker icon button to test the buzzer.
+// Crucial: do NOT await anything before calling Timer.testBuzz() — on iOS, the
+// audio-context unlock must happen in the synchronous call stack of the user
+// gesture, and awaits push the rest of the function into a microtask that no
+// longer counts as gesture-initiated.
+const testBuzzBtn = document.getElementById('testBuzzBtn');
+testBuzzBtn.addEventListener('click', () => {
+  const ok = Timer.testBuzz();
+  // Visual confirmation so the user can see the tap registered, regardless
+  // of whether audio actually came out.
+  testBuzzBtn.classList.add('flash');
+  setTimeout(() => testBuzzBtn.classList.remove('flash'), 250);
+  if (!ok) flashToast('Buzzer test failed — check console');
+});
 
 // Delegate list events: name edit, duration edit, delete, jump
 $('segList').addEventListener('change', (e) => {
