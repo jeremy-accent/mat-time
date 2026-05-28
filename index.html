@@ -147,7 +147,7 @@
   .timer.minimized .timer-label,
   .timer.minimized .next-up,
   .timer.minimized .totals,
-  .timer.minimized .advance-toggle { display: none; }
+  .timer.minimized .toggle-row { display: none; }
   .timer.minimized .countdown {
     font-size: 28px; line-height: 1;
     margin: 0;
@@ -221,29 +221,46 @@
   .next-up strong { color: var(--ink-soft); font-weight: 500; }
   .totals { font-size: 12px; color: var(--muted); margin-top: 4px; font-variant-numeric: tabular-nums; }
 
-  /* Auto-advance toggle (sits below the controls in the timer card) */
-  .advance-toggle {
+  /* Toggle pill row — sits below the controls in the timer card */
+  .toggle-row {
+    display: flex; flex-wrap: wrap; justify-content: center; gap: 6px;
+    margin-top: 8px;
+  }
+  .pill-toggle {
     display: inline-flex; align-items: center; gap: 8px;
     padding: 5px 12px 5px 8px;
     border-radius: 999px;
     background: var(--panel-2);
     font-size: 12px; color: var(--ink-soft);
-    margin-top: 6px;
-    transition: background 100ms ease;
+    transition: background 100ms ease, color 100ms ease, border-color 100ms ease;
     border: 1px solid transparent;
+    white-space: nowrap;
   }
-  .advance-toggle:active { background: var(--border-soft); }
-  .advance-toggle .dot {
+  .pill-toggle:active { background: var(--border-soft); }
+  .pill-toggle .dot {
     width: 8px; height: 8px; border-radius: 50%;
-    background: #7A9670;  /* green when auto-advance on */
+    background: #C2CBB6;  /* neutral when off */
     transition: background 100ms ease;
   }
-  .advance-toggle[data-on="false"] {
+  /* Auto-advance: ON = green (default behaviour), OFF = coral (manual mode) */
+  .pill-toggle.advance-toggle[data-on="true"] .dot { background: #7A9670; }
+  .pill-toggle.advance-toggle[data-on="false"] {
+    background: var(--coral-soft); border-color: var(--coral); color: var(--coral);
+  }
+  .pill-toggle.advance-toggle[data-on="false"] .dot { background: var(--coral); }
+  /* Buffer toggle: ON = coral filled (active break inserts), OFF = neutral */
+  .pill-toggle.buffer-toggle[data-on="true"] {
+    background: var(--coral-soft); border-color: var(--coral); color: var(--coral);
+  }
+  .pill-toggle.buffer-toggle[data-on="true"] .dot { background: var(--coral); }
+
+  /* In-buffer timer-card state (during the 10s break between segments) */
+  .timer.in-buffer {
     background: var(--coral-soft);
     border-color: var(--coral);
-    color: var(--coral);
   }
-  .advance-toggle[data-on="false"] .dot { background: var(--coral); }
+  .timer.in-buffer .timer-label { color: var(--coral); }
+  .timer.in-buffer .timer-segname { color: var(--ink); }
 
   /* ---------- Editor ---------- */
   .editor-head {
@@ -422,10 +439,16 @@
     </div>
     <div class="next-up" id="nextUp">&nbsp;</div>
     <div class="totals" id="totals">0:00 / 0:00</div>
-    <button type="button" class="advance-toggle" id="advanceToggle" data-on="true" aria-label="Toggle auto-advance">
-      <span class="dot" aria-hidden="true"></span>
-      <span class="label" id="advanceLabel">Auto-advance</span>
-    </button>
+    <div class="toggle-row">
+      <button type="button" class="pill-toggle advance-toggle" id="advanceToggle" data-on="true" aria-label="Toggle auto-advance">
+        <span class="dot" aria-hidden="true"></span>
+        <span class="label" id="advanceLabel">Auto-advance</span>
+      </button>
+      <button type="button" class="pill-toggle buffer-toggle" id="bufferToggle" data-on="false" aria-label="Toggle inter-segment break">
+        <span class="dot" aria-hidden="true"></span>
+        <span class="label" id="bufferLabel">+10s break</span>
+      </button>
+    </div>
   </section>
 
   <!-- ===== EDITOR ===== -->
@@ -500,6 +523,9 @@ const state = (() => {
           autoAdvance: parsed.autoAdvance !== false,
           // Validated lazily against BuzzerSounds in start()/changeSound()
           buzzerSound: (typeof parsed.buzzerSound === 'string' && parsed.buzzerSound) || 'scoreboard',
+          bufferEnabled: parsed.bufferEnabled === true,
+          bufferSeconds: typeof parsed.bufferSeconds === 'number' && parsed.bufferSeconds > 0
+            ? Math.min(120, Math.round(parsed.bufferSeconds)) : 10,
         };
       }
     }
@@ -517,6 +543,8 @@ function cloneDefault() {
     volume: DEFAULT_PLAN.volume,
     autoAdvance: true,
     buzzerSound: 'scoreboard',
+    bufferEnabled: false,
+    bufferSeconds: 10,
   };
 }
 
@@ -531,6 +559,8 @@ function saveState() {
         volume: state.volume,
         autoAdvance: state.autoAdvance,
         buzzerSound: state.buzzerSound,
+        bufferEnabled: state.bufferEnabled,
+        bufferSeconds: state.bufferSeconds,
         lastModified: Date.now(),
       }));
     } catch (e) { console.warn('Save failed', e); }
@@ -563,6 +593,19 @@ function parseDurationInput(str) {
 }
 function sumSeconds(segs) {
   return segs.reduce((a, s) => a + s.seconds, 0);
+}
+
+// Total wall-clock plan duration including inter-segment buffers if enabled.
+function totalPlanDuration() {
+  const segSum = state.segments.reduce((a, s) => a + s.seconds, 0);
+  if (state.bufferEnabled && state.segments.length > 1) {
+    return segSum + (state.segments.length - 1) * state.bufferSeconds;
+  }
+  return segSum;
+}
+
+function bufferSeconds() {
+  return state.bufferEnabled ? state.bufferSeconds : 0;
 }
 
 // ---------- HTML5 AUDIO FALLBACK ----------
@@ -926,8 +969,9 @@ const Timer = {
   wakeLock: null,
   state: 'idle',           // 'idle' | 'running' | 'paused' | 'finished'
   anchorMs: 0,             // performance.now() at the virtual plan start
-  currentIndex: 0,
-  elapsedInSegment: 0,
+  currentIndex: 0,         // index into state.segments — segment we're in or upcoming
+  elapsedInSegment: 0,     // seconds elapsed in the current phase (segment OR buffer)
+  inBuffer: false,         // true when paused/running in the buffer BEFORE currentIndex
   rafHandle: null,
 
   // Best-effort: create + resume Web Audio. Must be called from a gesture.
@@ -981,7 +1025,7 @@ const Timer = {
     this.ensureWebAudio();
     Buzzer.start();                   // keeps iOS session + buzz element alive
 
-    const beforeMs = (this.cumBefore(this.currentIndex) + this.elapsedInSegment) * 1000;
+    const beforeMs = (this.cumBefore(this.currentIndex, this.inBuffer) + this.elapsedInSegment) * 1000;
     this.anchorMs = performance.now() - beforeMs;
 
     this.scheduleAllBuzzesWebAudio();   // desktop audible path
@@ -1000,6 +1044,7 @@ const Timer = {
     const loc = this.locateAt(elapsedTotal);
     this.currentIndex = loc.index;
     this.elapsedInSegment = loc.elapsedInSeg;
+    this.inBuffer = loc.inBuffer;
     this.cancelScheduledBuzzes();
     this.clearBuzzTimeouts();
     this.releaseWakeLock();
@@ -1041,23 +1086,26 @@ const Timer = {
     index = Math.max(0, Math.min(state.segments.length - 1, index));
     this.currentIndex = index;
     this.elapsedInSegment = 0;
+    this.inBuffer = false;       // tapping a segment skips any preceding buffer
     if (this.state === 'running') this.reschedule();
     if (this.state === 'finished') this.state = 'paused';
     render();
   },
 
   reschedule() {
-    const beforeMs = (this.cumBefore(this.currentIndex) + this.elapsedInSegment) * 1000;
+    const beforeMs = (this.cumBefore(this.currentIndex, this.inBuffer) + this.elapsedInSegment) * 1000;
     this.anchorMs = performance.now() - beforeMs;
     this.scheduleAllBuzzesWebAudio();
     this.scheduleAllBuzzesTimeouts();
   },
 
-  // Called when the plan structure changes (edits, adds, deletes, reorders)
+  // Called when the plan structure changes (edits, adds, deletes, reorders,
+  // or the buffer toggle flips).
   onPlanChanged() {
     if (this.currentIndex >= state.segments.length) {
       this.currentIndex = Math.max(0, state.segments.length - 1);
       this.elapsedInSegment = 0;
+      this.inBuffer = false;
     }
     if (this.state === 'running') this.reschedule();
     render();
@@ -1070,61 +1118,93 @@ const Timer = {
     return loc.elapsedInSeg;
   },
 
-  cumBefore(idx) {
+  // Wall-clock time from anchor to the START of segment[idx]
+  // (or the buffer before it if inBuf is true).
+  cumBefore(idx, inBuf) {
+    const buf = bufferSeconds();
     let c = 0;
-    for (let i = 0; i < idx && i < state.segments.length; i++) c += state.segments[i].seconds;
+    for (let i = 0; i < idx && i < state.segments.length; i++) {
+      c += state.segments[i].seconds;
+      if (i < state.segments.length - 1) c += buf;
+    }
+    if (inBuf) c -= buf;  // start of the buffer is one buffer-length before the segment
     return c;
   },
 
-  // Given a total-elapsed-since-anchor time, find the current segment & local elapsed
+  // Locate the playhead at elapsedTotal seconds from anchor.
+  // Returns { inBuffer, index, elapsedInSeg, past }.
+  // - inBuffer=false: in segment[index], elapsedInSeg = time into that segment
+  // - inBuffer=true:  in the buffer BEFORE segment[index], elapsedInSeg = time into buffer
   locateAt(elapsedTotal) {
     if (elapsedTotal < 0) elapsedTotal = 0;
+    const buf = bufferSeconds();
     let cum = 0;
     for (let i = 0; i < state.segments.length; i++) {
       const segLen = state.segments[i].seconds;
       if (elapsedTotal < cum + segLen) {
-        return { index: i, elapsedInSeg: elapsedTotal - cum, past: false };
+        return { inBuffer: false, index: i, elapsedInSeg: elapsedTotal - cum, past: false };
       }
       cum += segLen;
+      if (buf > 0 && i < state.segments.length - 1) {
+        if (elapsedTotal < cum + buf) {
+          return { inBuffer: true, index: i + 1, elapsedInSeg: elapsedTotal - cum, past: false };
+        }
+        cum += buf;
+      }
     }
-    return { index: state.segments.length - 1, elapsedInSeg: state.segments[state.segments.length - 1].seconds, past: true };
+    return { inBuffer: false, index: state.segments.length - 1, elapsedInSeg: state.segments[state.segments.length - 1].seconds, past: true };
   },
 
   // Pre-schedule Web Audio buzzes for the desktop path. iOS often silences
-  // these but the desktop browser plays them clearly.
+  // these but the desktop browser plays them clearly. Includes buzz at end
+  // of each buffer phase (== start of next segment) when buffer is enabled.
   scheduleAllBuzzesWebAudio() {
     this.cancelScheduledBuzzes();
     if (!this.audioCtx) return;
     const ctx = this.audioCtx;
     const segs = state.segments;
+    const buf = bufferSeconds();
     const nowMs = performance.now();
-    let cumEnd = 0;
+    let cum = 0;
     for (let i = 0; i < segs.length; i++) {
-      cumEnd += segs[i].seconds;
-      const fireAtMs = this.anchorMs + cumEnd * 1000;
-      const delaySec = (fireAtMs - nowMs) / 1000;
-      if (delaySec > 0.05) {
-        this.scheduleBuzzAt(ctx.currentTime + delaySec);
+      cum += segs[i].seconds;
+      const fireSeg = this.anchorMs + cum * 1000;
+      const delaySec = (fireSeg - nowMs) / 1000;
+      if (delaySec > 0.05) this.scheduleBuzzAt(ctx.currentTime + delaySec);
+      if (buf > 0 && i < segs.length - 1) {
+        cum += buf;
+        const fireBuf = this.anchorMs + cum * 1000;
+        const delayBuf = (fireBuf - nowMs) / 1000;
+        if (delayBuf > 0.05) this.scheduleBuzzAt(ctx.currentTime + delayBuf);
       }
     }
   },
 
-  // Schedule setTimeout-driven segment-end events. Each event fires the
+  // Schedule setTimeout-driven phase-end events. Each event fires the
   // HTMLAudio buzz (audible on iOS) and runs the auto/manual-advance logic.
-  // setTimeout fires reliably on iOS PWAs while the Buzzer silent loop is playing.
+  // setTimeout fires reliably on iOS while the Buzzer silent loop is playing.
   scheduleAllBuzzesTimeouts() {
     this.clearBuzzTimeouts();
     const segs = state.segments;
+    const buf = bufferSeconds();
     const nowMs = performance.now();
-    let cumEnd = 0;
+    let cum = 0;
     for (let i = 0; i < segs.length; i++) {
-      cumEnd += segs[i].seconds;
-      const fireAtMs = this.anchorMs + cumEnd * 1000;
-      const delayMs = fireAtMs - nowMs;
-      if (delayMs > 30) {
-        const segIdx = i;
-        const id = setTimeout(() => this.onSegmentEnd(segIdx), delayMs);
-        this.buzzTimeouts.push(id);
+      cum += segs[i].seconds;
+      const fireSeg = this.anchorMs + cum * 1000;
+      const delaySeg = fireSeg - nowMs;
+      if (delaySeg > 30) {
+        const idx = i;
+        this.buzzTimeouts.push(setTimeout(() => this.onPhaseEnd('segment', idx), delaySeg));
+      }
+      if (buf > 0 && i < segs.length - 1) {
+        cum += buf;
+        const fireBuf = this.anchorMs + cum * 1000;
+        const delayBuf = fireBuf - nowMs;
+        if (delayBuf > 30) {
+          const idx = i;
+          this.buzzTimeouts.push(setTimeout(() => this.onPhaseEnd('buffer', idx), delayBuf));
+        }
       }
     }
   },
@@ -1134,38 +1214,54 @@ const Timer = {
     this.buzzTimeouts = [];
   },
 
-  // Fires when a segment's end time is reached (via setTimeout).
-  // Plays the audible buzz and decides whether to auto-advance or pause.
-  onSegmentEnd(segIdx) {
+  // Fires when a phase (segment or buffer) ends. Plays the audible buzz and
+  // decides what comes next based on phase + buffer/manual-advance settings.
+  //
+  // phase='segment', idx=N: segment N just ended
+  //   - if buffer enabled (and not last): display loop will enter the buffer
+  //     phase naturally; don't pause
+  //   - if buffer disabled and manual mode: pause at start of segment N+1
+  //   - else: display loop rolls over to segment N+1
+  //
+  // phase='buffer', idx=N: the buffer between segment N and N+1 just ended
+  //   - if manual mode: pause at start of segment N+1
+  //   - else: display loop rolls over into segment N+1
+  onPhaseEnd(phase, idx) {
     Buzzer.fire(state.volume);
 
-    const isLast = segIdx >= state.segments.length - 1;
-    if (isLast) {
-      // The display loop will detect "past end" and call finish() next tick;
-      // we don't pause here so the final buzz can fully ring out.
+    const lastSeg = state.segments.length - 1;
+
+    if (phase === 'segment') {
+      if (idx >= lastSeg) return;        // final buzz; display loop will finish()
+      if (state.bufferEnabled) return;   // buffer phase coming up; display loop handles it
+      if (state.autoAdvance !== false) return;  // auto-advance: roll over naturally
+      this._pauseAtSegment(idx + 1);
       return;
     }
 
-    if (state.autoAdvance !== false) {
-      // Auto mode: the display loop naturally rolls over to the next segment.
-      // Nothing extra to do here.
+    if (phase === 'buffer') {
+      // Buffer ended → segment idx+1 starts now
+      if (state.autoAdvance !== false) return;  // roll over naturally
+      this._pauseAtSegment(idx + 1);
       return;
     }
+  },
 
-    // Manual mode: pause right at the segment boundary, ready to start next.
+  _pauseAtSegment(nextIdx) {
     this.clearBuzzTimeouts();
     this.cancelScheduledBuzzes();
     this.releaseWakeLock();
     cancelAnimationFrame(this.rafHandle);
     Buzzer.stop();
     this.state = 'paused';
-    this.currentIndex = segIdx + 1;
+    this.currentIndex = nextIdx;
     this.elapsedInSegment = 0;
+    this.inBuffer = false;
     if ('mediaSession' in navigator) {
       try { navigator.mediaSession.playbackState = 'paused'; } catch (_) {}
     }
     render();
-    flashToast('Ready: "' + state.segments[segIdx + 1].name + '" · tap ▶');
+    flashToast('Ready: "' + state.segments[nextIdx].name + '" · tap ▶');
   },
 
   // Scoreboard horn: 2 detuned sawtooth oscillators, ~2s, with envelope and filters
@@ -1250,29 +1346,39 @@ const Timer = {
 
   updateDisplay() {
     const elapsedTotal = (performance.now() - this.anchorMs) / 1000;
-    const total = sumSeconds(state.segments);
+    const total = totalPlanDuration();
     if (elapsedTotal >= total) {
       this.finish();
       return;
     }
     const loc = this.locateAt(elapsedTotal);
-    if (loc.index !== this.currentIndex) {
+    // Detect phase change (segment ↔ buffer, or new segment) — update the
+    // big segment-name label + next-up + media session.
+    if (loc.index !== this.currentIndex || loc.inBuffer !== this.inBuffer) {
       this.currentIndex = loc.index;
+      this.inBuffer = loc.inBuffer;
       this.elapsedInSegment = loc.elapsedInSeg;
-      // Update segment name + next-up in the timer card on boundary crossing
       const seg = state.segments[this.currentIndex];
-      $('curName').textContent = seg.name;
-      const nextSeg = state.segments[this.currentIndex + 1];
-      if (nextSeg) {
-        $('nextUp').innerHTML = 'Up next · <strong>' + escapeHTML(nextSeg.name) + '</strong>';
+      const timerCard = $('timerCard');
+      timerCard.classList.toggle('in-buffer', loc.inBuffer);
+      if (loc.inBuffer) {
+        $('curName').textContent = 'Break · before ' + (seg ? seg.name : '');
+        $('timerLabel').textContent = 'Break';
+        $('nextUp').innerHTML = seg ? 'Starting · <strong>' + escapeHTML(seg.name) + '</strong>' : '';
       } else {
-        $('nextUp').innerHTML = '<em style="color:var(--muted)">Last segment</em>';
+        $('curName').textContent = seg ? seg.name : '';
+        $('timerLabel').textContent = 'Now';
+        const nextSeg = state.segments[this.currentIndex + 1];
+        if (nextSeg) {
+          $('nextUp').innerHTML = 'Up next · <strong>' + escapeHTML(nextSeg.name) + '</strong>';
+        } else {
+          $('nextUp').innerHTML = '<em style="color:var(--muted)">Last segment</em>';
+        }
       }
-      // Refresh media session metadata for new segment
       if ('mediaSession' in navigator && navigator.mediaSession.metadata) {
         try {
           navigator.mediaSession.metadata = new MediaMetadata({
-            title: seg.name,
+            title: loc.inBuffer ? ('Break · before ' + (seg ? seg.name : '')) : (seg ? seg.name : 'Mat Time'),
             artist: 'Mat Time',
             album: 'BJJ Class',
           });
@@ -1287,12 +1393,14 @@ const Timer = {
     this.state = 'finished';
     this.currentIndex = state.segments.length - 1;
     this.elapsedInSegment = state.segments[this.currentIndex].seconds;
+    this.inBuffer = false;
     this.cancelScheduledBuzzes();
     this.clearBuzzTimeouts();
     this.releaseWakeLock();
     Buzzer.stop();
     if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
     cancelAnimationFrame(this.rafHandle);
+    $('timerCard').classList.remove('in-buffer');
     render();
   },
 
@@ -1305,6 +1413,8 @@ const Timer = {
     this.state = 'idle';
     this.currentIndex = 0;
     this.elapsedInSegment = 0;
+    this.inBuffer = false;
+    $('timerCard').classList.remove('in-buffer');
     render();
   },
 };
@@ -1313,12 +1423,21 @@ const Timer = {
 const $ = (id) => document.getElementById(id);
 
 function renderTimerOnly(elapsedTotal, loc) {
-  const seg = state.segments[Timer.currentIndex];
-  if (!seg) return;
-  const remaining = Math.max(0, seg.seconds - (loc ? loc.elapsedInSeg : Timer.elapsedInSegment));
+  const inBuf = loc ? loc.inBuffer : Timer.inBuffer;
+  const elapsedInPhase = loc ? loc.elapsedInSeg : Timer.elapsedInSegment;
+  let remaining;
+  if (inBuf) {
+    remaining = Math.max(0, state.bufferSeconds - elapsedInPhase);
+  } else {
+    const seg = state.segments[Timer.currentIndex];
+    if (!seg) return;
+    remaining = Math.max(0, seg.seconds - elapsedInPhase);
+  }
   $('countdown').textContent = fmt(remaining);
-  const total = sumSeconds(state.segments);
-  const totalElapsed = elapsedTotal != null ? elapsedTotal : (Timer.cumBefore(Timer.currentIndex) + Timer.elapsedInSegment);
+  const total = totalPlanDuration();
+  const totalElapsed = elapsedTotal != null
+    ? elapsedTotal
+    : (Timer.cumBefore(Timer.currentIndex, Timer.inBuffer) + Timer.elapsedInSegment);
   $('totals').textContent = fmtTotal(Math.min(totalElapsed, total)) + ' / ' + fmtTotal(total);
 }
 
@@ -1331,14 +1450,23 @@ function renderTimerCard() {
     $('totals').textContent = '0:00 / 0:00';
     return;
   }
-  $('curName').textContent = seg.name;
-  const remaining = Math.max(0, seg.seconds - Timer.elapsedInSegment);
-  $('countdown').textContent = fmt(remaining);
+  const inBuf = Timer.inBuffer;
+  $('timerCard').classList.toggle('in-buffer', inBuf && Timer.state !== 'finished');
+
+  if (inBuf) {
+    $('curName').textContent = 'Break · before ' + seg.name;
+    const remaining = Math.max(0, state.bufferSeconds - Timer.elapsedInSegment);
+    $('countdown').textContent = fmt(remaining);
+  } else {
+    $('curName').textContent = seg.name;
+    const remaining = Math.max(0, seg.seconds - Timer.elapsedInSegment);
+    $('countdown').textContent = fmt(remaining);
+  }
 
   // Label
   if (Timer.state === 'finished') $('timerLabel').textContent = 'Class complete';
-  else if (Timer.state === 'running') $('timerLabel').textContent = 'Now';
-  else if (Timer.state === 'paused') $('timerLabel').textContent = 'Paused';
+  else if (Timer.state === 'running') $('timerLabel').textContent = inBuf ? 'Break' : 'Now';
+  else if (Timer.state === 'paused') $('timerLabel').textContent = inBuf ? 'Break · paused' : 'Paused';
   else $('timerLabel').textContent = 'Ready';
 
   $('timerCard').classList.toggle('finished', Timer.state === 'finished');
@@ -1347,15 +1475,17 @@ function renderTimerCard() {
   const nextSeg = state.segments[Timer.currentIndex + 1];
   if (Timer.state === 'finished') {
     $('nextUp').textContent = 'Tap reset or pick a segment to start again';
+  } else if (inBuf) {
+    $('nextUp').innerHTML = 'Starting · <strong>' + escapeHTML(seg.name) + '</strong>';
   } else if (nextSeg) {
     $('nextUp').innerHTML = 'Up next · <strong>' + escapeHTML(nextSeg.name) + '</strong>';
   } else {
     $('nextUp').innerHTML = '<em style="color:var(--muted)">Last segment</em>';
   }
 
-  // Totals
-  const total = sumSeconds(state.segments);
-  const totalElapsed = Timer.cumBefore(Timer.currentIndex) + Timer.elapsedInSegment;
+  // Totals (include buffer time in total when enabled)
+  const total = totalPlanDuration();
+  const totalElapsed = Timer.cumBefore(Timer.currentIndex, Timer.inBuffer) + Timer.elapsedInSegment;
   $('totals').textContent = fmtTotal(Math.min(totalElapsed, total)) + ' / ' + fmtTotal(total);
 
   // Play icon
@@ -1400,7 +1530,10 @@ function renderPlanList() {
 
     ol.appendChild(li);
   });
-  $('planTotal').textContent = fmtTotal(sumSeconds(state.segments));
+  $('planTotal').textContent = fmtTotal(totalPlanDuration())
+    + (state.bufferEnabled && state.segments.length > 1
+       ? ' · incl ' + state.bufferSeconds + 's breaks'
+       : '');
 }
 
 function render() {
@@ -1470,8 +1603,29 @@ advanceToggle.addEventListener('click', () => {
   renderAdvanceToggle();
   saveState();
   // If the timer is currently running, no need to reschedule — the
-  // setTimeout-driven onSegmentEnd reads state.autoAdvance at fire time.
+  // setTimeout-driven onPhaseEnd reads state.autoAdvance at fire time.
   flashToast(state.autoAdvance ? 'Auto-advance ON' : 'Manual mode — timer will pause at each buzzer');
+});
+
+// Inter-segment buffer toggle
+const bufferToggle = $('bufferToggle');
+const bufferLabel  = $('bufferLabel');
+function renderBufferToggle() {
+  const on = state.bufferEnabled === true;
+  bufferToggle.dataset.on = on ? 'true' : 'false';
+  bufferLabel.textContent = on ? state.bufferSeconds + 's break ON' : '+' + state.bufferSeconds + 's break';
+}
+renderBufferToggle();
+bufferToggle.addEventListener('click', () => {
+  state.bufferEnabled = !state.bufferEnabled;
+  renderBufferToggle();
+  saveState();
+  // The timer engine reads state.bufferEnabled when scheduling and locating.
+  // If running, reschedule with the new shape — onPlanChanged handles that.
+  Timer.onPlanChanged();
+  flashToast(state.bufferEnabled
+    ? state.bufferSeconds + 's break between segments'
+    : 'No break between segments');
 });
 
 // Volume
