@@ -73,6 +73,24 @@
   }
   .test-buzz-btn:active { background: var(--panel-2); color: var(--coral); transform: scale(0.93); }
   .test-buzz-btn.flash { background: var(--coral-soft); color: var(--coral); }
+
+  /* Diagnostic readout (shows after first test-buzz tap) */
+  .diag {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 11px;
+    color: var(--muted);
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    margin: 0 0 14px;
+    line-height: 1.5;
+    word-break: break-word;
+  }
+  .diag.hidden { display: none; }
+  .diag .row { display: flex; justify-content: space-between; gap: 8px; }
+  .diag .ok { color: #4a7a3a; }
+  .diag .bad { color: var(--coral); }
   .vol-control input[type="range"] {
     -webkit-appearance: none; appearance: none;
     width: 90px; height: 4px; background: var(--border); border-radius: 2px;
@@ -292,6 +310,9 @@
     </div>
   </header>
 
+  <!-- Diagnostic readout — hidden until first buzzer test -->
+  <div class="diag hidden" id="diag"></div>
+
   <!-- ===== TIMER ===== -->
   <section class="timer" id="timerCard" aria-live="polite">
     <div class="timer-label" id="timerLabel">Now</div>
@@ -440,6 +461,118 @@ function parseDurationInput(str) {
 }
 function sumSeconds(segs) {
   return segs.reduce((a, s) => a + s.seconds, 0);
+}
+
+// ---------- HTML5 AUDIO FALLBACK ----------
+// iOS Safari's Web Audio API sometimes won't actually route audio to the
+// speaker even when state === "running". HTMLAudioElement uses a different
+// underlying audio session that's much more reliable on iOS. We generate a
+// real scoreboard-buzzer WAV in JS at page load and keep an <audio> element
+// primed so we can fire it from inside any user gesture as a fallback.
+
+function generateBuzzWav(durationSec, sampleRate) {
+  durationSec = durationSec || 2.0;
+  sampleRate = sampleRate || 44100;
+  const samples = Math.floor(durationSec * sampleRate);
+  const channels = 1, bps = 2;
+  const blockAlign = channels * bps;
+  const byteRate = sampleRate * blockAlign;
+  const dataSize = samples * blockAlign;
+  const buf = new ArrayBuffer(44 + dataSize);
+  const v = new DataView(buf);
+  function writeStr(off, s) { for (let i = 0; i < s.length; i++) v.setUint8(off + i, s.charCodeAt(i)); }
+  writeStr(0, 'RIFF');
+  v.setUint32(4, 36 + dataSize, true);
+  writeStr(8, 'WAVE');
+  writeStr(12, 'fmt ');
+  v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true);            // PCM
+  v.setUint16(22, channels, true);
+  v.setUint32(24, sampleRate, true);
+  v.setUint32(28, byteRate, true);
+  v.setUint16(32, blockAlign, true);
+  v.setUint16(34, 16, true);           // bits
+  writeStr(36, 'data');
+  v.setUint32(40, dataSize, true);
+
+  // Two slightly detuned naive sawtooths at ~165 / 169 Hz with attack/release
+  // envelope. Aliasing is welcome — real scoreboard horns are gritty.
+  const f1 = 165, f2 = 169;
+  const fadeIn = Math.floor(0.025 * sampleRate);
+  const fadeOut = Math.floor(0.20 * sampleRate);
+  for (let i = 0; i < samples; i++) {
+    const t = i / sampleRate;
+    let env = 1;
+    if (i < fadeIn) env = i / fadeIn;
+    else if (i > samples - fadeOut) env = (samples - i) / fadeOut;
+    const ph1 = (t * f1) % 1;
+    const ph2 = (t * f2) % 1;
+    let s = ((2 * ph1 - 1) + (2 * ph2 - 1)) * 0.22 * env;
+    if (s > 1) s = 1; else if (s < -1) s = -1;
+    v.setInt16(44 + i * 2, Math.floor(s * 32767), true);
+  }
+  return buf;
+}
+
+const HTMLAudioBuzz = (() => {
+  const buf = generateBuzzWav(2.0, 44100);
+  const url = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+  const el = new Audio();
+  el.src = url;
+  el.preload = 'auto';
+  el.playsInline = true;
+  el.setAttribute('playsinline', '');     // iOS hint
+  // Volume slider drives this too
+  el.volume = 0.8;
+  // Telemetry for diagnostics
+  const tele = { lastPlay: 0, lastResult: 'never', lastError: '' };
+  el.addEventListener('playing', () => { tele.lastResult = 'playing'; });
+  el.addEventListener('ended',   () => { tele.lastResult = 'ended'; });
+  el.addEventListener('error',   () => { tele.lastResult = 'error'; tele.lastError = (el.error && el.error.code) || 'unknown'; });
+
+  function fire(volume) {
+    el.volume = Math.max(0, Math.min(1, volume));
+    try {
+      el.pause();
+      el.currentTime = 0;
+    } catch (_) {}
+    tele.lastPlay = Date.now();
+    tele.lastResult = 'starting';
+    const p = el.play();
+    if (p && typeof p.then === 'function') {
+      p.catch((e) => {
+        tele.lastResult = 'rejected';
+        tele.lastError = String(e && e.message || e);
+        console.warn('[Mat Time] HTMLAudio play rejected:', e);
+      });
+    }
+    return tele;
+  }
+  return { fire, telemetry: tele, element: el };
+})();
+
+// ---------- DIAGNOSTIC READOUT ----------
+function renderDiag(label) {
+  const el = document.getElementById('diag');
+  if (!el) return;
+  el.classList.remove('hidden');
+  const ctx = Timer.audioCtx;
+  const ht  = HTMLAudioBuzz.telemetry;
+  const lines = [];
+  lines.push('<div class="row"><strong>' + escapeHTML(label || 'Buzzer test') + '</strong><span>' + new Date().toLocaleTimeString() + '</span></div>');
+  if (ctx) {
+    const stateOk = ctx.state === 'running';
+    lines.push('<div class="row"><span>Web Audio ctx</span><span class="' + (stateOk ? 'ok' : 'bad') + '">' +
+               escapeHTML(ctx.state) + ' · ' + ctx.sampleRate + ' Hz · ' + ctx.destination.channelCount + 'ch</span></div>');
+  } else {
+    lines.push('<div class="row"><span>Web Audio ctx</span><span class="bad">not created</span></div>');
+  }
+  const htOk = ht.lastResult === 'playing' || ht.lastResult === 'ended';
+  lines.push('<div class="row"><span>HTMLAudio</span><span class="' + (htOk ? 'ok' : 'bad') + '">' +
+             escapeHTML(ht.lastResult) + (ht.lastError ? ' · ' + escapeHTML(String(ht.lastError)) : '') + '</span></div>');
+  lines.push('<div class="row"><span>Volume</span><span>' + Math.round(state.volume * 100) + '%</span></div>');
+  lines.push('<div class="row"><span>UA</span><span>' + escapeHTML(navigator.userAgent.replace(/^Mozilla\/5\.0 \(/, '').slice(0, 60)) + '…</span></div>');
+  el.innerHTML = lines.join('');
 }
 
 // ---------- TIMER ENGINE ----------
@@ -684,23 +817,28 @@ const Timer = {
   // Test the buzzer. Must be invoked synchronously inside a user-gesture
   // handler — iOS only allows AudioContext.resume() to escape the suspended
   // state if the call originates inside that gesture's call stack.
+  // We fire BOTH the Web Audio buzz AND an HTMLAudioElement playing a
+  // generated WAV — on iOS, the latter is much more reliably routed.
   testBuzz() {
     try {
+      // --- Web Audio path ---
       if (!this.audioCtx) {
         const Ctx = window.AudioContext || window.webkitAudioContext;
-        if (!Ctx) { console.warn('[Mat Time] Web Audio not supported'); return false; }
-        this.audioCtx = new Ctx();
+        if (Ctx) this.audioCtx = new Ctx();
       }
-      // Fire-and-forget resume — must be called synchronously in the gesture.
-      if (this.audioCtx.state === 'suspended') {
-        this.audioCtx.resume().catch((e) => console.warn('[Mat Time] resume failed', e));
+      if (this.audioCtx) {
+        if (this.audioCtx.state === 'suspended') {
+          this.audioCtx.resume().catch((e) => console.warn('[Mat Time] resume failed', e));
+        }
+        if (!this.silentLoop) this.startSilentLoop();
+        this.scheduleBuzzAt(this.audioCtx.currentTime + 0.05);
       }
-      if (!this.silentLoop) this.startSilentLoop();
-      const ctxNow = this.audioCtx.currentTime;
-      this.scheduleBuzzAt(ctxNow + 0.05);
-      console.log('[Mat Time] test buzz scheduled · vol=' + state.volume +
-                  ' · ctxState=' + this.audioCtx.state +
-                  ' · ctxTime=' + ctxNow.toFixed(2));
+
+      // --- HTMLAudioElement fallback path (iOS-reliable) ---
+      HTMLAudioBuzz.fire(state.volume);
+
+      console.log('[Mat Time] test buzz fired · vol=' + state.volume +
+                  ' · ctxState=' + (this.audioCtx ? this.audioCtx.state : 'n/a'));
       return true;
     } catch (e) {
       console.error('[Mat Time] testBuzz failed:', e);
@@ -927,8 +1065,11 @@ const vs = $('volSlider');
 vs.value = String(Math.round(state.volume * 100));
 vs.addEventListener('input', () => {
   state.volume = Math.max(0, Math.min(1, vs.valueAsNumber / 100));
+  HTMLAudioBuzz.element.volume = state.volume;
   saveState();
 });
+// Initial sync
+HTMLAudioBuzz.element.volume = state.volume;
 // Tap the speaker icon button to test the buzzer.
 // Crucial: do NOT await anything before calling Timer.testBuzz() — on iOS, the
 // audio-context unlock must happen in the synchronous call stack of the user
@@ -937,11 +1078,12 @@ vs.addEventListener('input', () => {
 const testBuzzBtn = document.getElementById('testBuzzBtn');
 testBuzzBtn.addEventListener('click', () => {
   const ok = Timer.testBuzz();
-  // Visual confirmation so the user can see the tap registered, regardless
-  // of whether audio actually came out.
   testBuzzBtn.classList.add('flash');
   setTimeout(() => testBuzzBtn.classList.remove('flash'), 250);
-  if (!ok) flashToast('Buzzer test failed — check console');
+  // Show the diagnostic readout — slight delay so HTMLAudio has time to
+  // resolve its play() promise and update its telemetry.
+  setTimeout(() => renderDiag('Test buzzer'), 250);
+  if (!ok) flashToast('Buzzer test failed — check diagnostic');
 });
 
 // Delegate list events: name edit, duration edit, delete, jump
