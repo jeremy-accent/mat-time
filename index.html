@@ -278,8 +278,8 @@
   .seg-list { list-style: none; padding: 0; margin: 0 0 8px; }
   .seg-row {
     display: grid;
-    grid-template-columns: 28px 1fr 66px 32px;
-    align-items: center; gap: 6px;
+    grid-template-columns: 28px 1fr 60px 30px 30px;
+    align-items: center; gap: 5px;
     padding: 8px 10px;
     margin-bottom: 6px;
     background: var(--panel);
@@ -330,12 +330,16 @@
     color: var(--ink);
   }
   .seg-duration-input:focus { background: var(--bg); box-shadow: inset 0 0 0 1px var(--coral); }
-  .seg-delete {
-    width: 32px; height: 32px; border-radius: 50%;
-    color: var(--muted); font-size: 18px;
+  .seg-delete, .seg-dup {
+    width: 30px; height: 30px; border-radius: 50%;
+    color: var(--muted);
     display: inline-flex; align-items: center; justify-content: center;
+    transition: background 80ms ease, color 80ms ease;
   }
+  .seg-delete { font-size: 18px; }
   .seg-delete:active { background: var(--panel-2); color: var(--coral); }
+  .seg-dup svg { width: 14px; height: 14px; }
+  .seg-dup:active { background: var(--panel-2); color: var(--ink); }
 
   /* Tap empty space on a row to jump timer there */
   .seg-jump-area {
@@ -351,6 +355,7 @@
     border: 1px dashed var(--border); border-radius: 12px;
   }
   .add-btn:active { background: var(--panel); color: var(--ink-soft); }
+  .add-btn-top { margin: 0 0 8px; }
 
   .footer-actions {
     display: flex; gap: 8px; justify-content: center;
@@ -457,8 +462,9 @@
       <h2>Plan</h2>
       <span class="plan-total" id="planTotal">0:00</span>
     </div>
+    <button class="add-btn add-btn-top" id="addTopBtn">+ Add to top</button>
     <ol class="seg-list" id="segList"></ol>
-    <button class="add-btn" id="addBtn">+ Add segment</button>
+    <button class="add-btn" id="addBtn">+ Add to bottom</button>
     <div class="footer-actions">
       <button class="text-btn" id="resetBtn">Reset to default plan</button>
     </div>
@@ -890,30 +896,54 @@ const Buzzer = (() => {
     });
   }
 
-  // Switch which sound the buzz element loops. Must be called inside a user
-  // gesture because changing src + play() requires gesture permission on iOS.
+  // Switch which sound the buzz element loops.
+  //
+  // Important iOS behaviour: a <select> change event fired after the wheel
+  // picker closes does NOT count as a fresh user gesture, so calling .play()
+  // here gets rejected. We must avoid play() in this path entirely when the
+  // buzzer isn't already active — the next real-button gesture (test button
+  // or main Play) will pick up state.buzzerSound and play() in a valid
+  // gesture context.
   function changeSound(soundKey) {
     if (!BuzzerSounds[soundKey]) return;
+    if (!active) {
+      // Inactive: invalidate cache so next start() reads state.buzzerSound
+      // and sets src inside the gesture. Don't touch audio elements here.
+      currentSoundKey = null;
+      return;
+    }
+    // Active (timer running or buzzer warmed): swap src in place. If this
+    // call IS inside a real gesture (e.g. tapping a custom button), play()
+    // succeeds. If not, the element will be paused; fire() recovers it.
     currentSoundKey = soundKey;
     buzzEl.src = getBuzzerSoundURL(soundKey);
     buzzEl.volume = 0;
     if (unmuteEndTimeout) { clearTimeout(unmuteEndTimeout); unmuteEndTimeout = null; }
-    // Re-play inside the gesture so iOS accepts the new src
     const p = buzzEl.play();
     if (p && p.catch) p.catch((e) => {
       tele.buzzResult = 'rejected';
       tele.buzzError  = String(e && e.message || e);
       console.warn('[Mat Time] buzz.play() after src change rejected:', e);
     });
-    // Also ensure the silent session is up
-    if (!active) start();
   }
 
   // Make the buzz audible for ~2 seconds. Works from setTimeout / locked
   // screen because volume mutation is not gesture-gated on iOS.
+  //
+  // If buzzEl ended up paused for any reason (e.g. user changed sound
+  // through the <select> which paused it without a valid play() gesture),
+  // we attempt play() here. Inside a real button-gesture call site this
+  // succeeds and recovers the buzzer.
   function fire(volume) {
     tele.lastFire = Date.now();
-    if (!active) start();          // best effort — only succeeds inside a gesture
+    if (!active) start();
+    if (buzzEl.paused) {
+      const pb = buzzEl.play();
+      if (pb && pb.catch) pb.catch((e) => {
+        tele.buzzResult = 'rejected';
+        tele.buzzError  = String(e && e.message || e);
+      });
+    }
     try { buzzEl.currentTime = 0; } catch (_) {}
     buzzEl.volume = Math.max(0, Math.min(1, volume));
     if (unmuteEndTimeout) clearTimeout(unmuteEndTimeout);
@@ -1525,7 +1555,13 @@ function renderPlanList() {
       '<div class="seg-handle" data-handle>≡</div>',
       '<input class="seg-name-input" type="text" value="', escapeAttr(seg.name), '" data-role="name" enterkeyhint="done" autocomplete="off" autocapitalize="sentences" spellcheck="false">',
       '<input class="seg-duration-input" type="text" value="', fmt(seg.seconds), '" data-role="dur" inputmode="numeric" enterkeyhint="done" autocomplete="off">',
-      '<button class="seg-delete" data-role="del" aria-label="Delete segment">×</button>',
+      '<button type="button" class="seg-dup" data-role="dup" aria-label="Duplicate segment">',
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">',
+          '<rect x="9" y="9" width="13" height="13" rx="2"></rect>',
+          '<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>',
+        '</svg>',
+      '</button>',
+      '<button type="button" class="seg-delete" data-role="del" aria-label="Delete segment">×</button>',
     ].join('');
 
     ol.appendChild(li);
@@ -1569,7 +1605,7 @@ cd.addEventListener('pointerup', cancelLP);
 cd.addEventListener('pointerleave', cancelLP);
 cd.addEventListener('pointercancel', cancelLP);
 
-// Add segment
+// Add segment to bottom
 $('addBtn').addEventListener('click', () => {
   state.segments.push({
     id: crypto.randomUUID(),
@@ -1579,6 +1615,38 @@ $('addBtn').addEventListener('click', () => {
   saveState();
   Timer.onPlanChanged();
 });
+
+// Add segment to top — shift currentIndex so the active segment stays the same
+$('addTopBtn').addEventListener('click', () => {
+  state.segments.unshift({
+    id: crypto.randomUUID(),
+    name: 'New segment',
+    seconds: 60,
+  });
+  // Anything past the new index 0 shifts down by one.
+  if (Timer.state !== 'idle' || Timer.currentIndex > 0 || Timer.elapsedInSegment > 0) {
+    Timer.currentIndex += 1;
+  }
+  saveState();
+  Timer.onPlanChanged();
+});
+
+// Duplicate a segment in place (inserts a copy right after it)
+function duplicateSegment(idx) {
+  if (idx < 0 || idx >= state.segments.length) return;
+  const orig = state.segments[idx];
+  const copy = {
+    id: crypto.randomUUID(),
+    name: orig.name,
+    seconds: orig.seconds,
+  };
+  state.segments.splice(idx + 1, 0, copy);
+  // If currentIndex is past the duplication point, shift it.
+  if (Timer.currentIndex > idx) Timer.currentIndex += 1;
+  saveState();
+  Timer.onPlanChanged();
+  flashToast('Duplicated "' + orig.name + '"');
+}
 
 // Reset to default
 $('resetBtn').addEventListener('click', () => {
@@ -1652,11 +1720,14 @@ soundSelect.addEventListener('change', () => {
   if (!BuzzerSounds[key]) return;
   state.buzzerSound = key;
   saveState();
-  // Switch the buzz audio source AND play a preview — both inside this
-  // user-gesture event so iOS accepts the play() call.
+  // iOS quirk: the change event fired after the wheel picker closes is
+  // NOT treated as a fresh user gesture, so play() would be rejected
+  // (and worse, would leave the audio elements paused). Don't attempt to
+  // preview here. changeSound just records the choice; the next real-
+  // button gesture (test buzzer or Play) will switch + play in valid
+  // gesture context.
   Buzzer.changeSound(key);
-  Buzzer.fire(state.volume);
-  flashToast('Buzzer: ' + BuzzerSounds[key].label);
+  flashToast('Buzzer: ' + BuzzerSounds[key].label + ' · tap the speaker to preview');
 });
 // Tap the speaker icon button to test the buzzer.
 // Crucial: do NOT await anything before calling Timer.testBuzz() — on iOS, the
@@ -1700,9 +1771,12 @@ $('segList').addEventListener('click', (e) => {
   const row = e.target.closest('.seg-row');
   if (!row) return;
   const idx = parseInt(row.dataset.index, 10);
-  if (e.target.dataset.role === 'del') {
-    softDelete(idx);
-  }
+  // The click target may be a child of the action button (e.g. SVG inside
+  // the duplicate button). Walk up to find the [data-role] owner.
+  const actor = e.target.closest('[data-role]');
+  const role = actor && actor.dataset.role;
+  if (role === 'del') softDelete(idx);
+  else if (role === 'dup') duplicateSegment(idx);
 });
 // Tap segment name / row whitespace → jump timer to that segment
 $('segList').addEventListener('dblclick', (e) => {
