@@ -581,69 +581,105 @@ function generateSilentLoopWav(durationSec, sampleRate) {
   return buf;
 }
 
-// Keeps iOS audio session active + keeps JS running when screen is locked.
-const SilentLoop = (() => {
-  const buf = generateSilentLoopWav(30, 44100);
-  const url = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
-  const el = new Audio();
-  el.src = url;
-  el.preload = 'auto';
-  el.loop = true;
-  el.volume = 1.0;     // amplitude is already tiny inside the WAV itself
-  el.playsInline = true;
-  el.setAttribute('playsinline', '');
-  let playing = false;
-  el.addEventListener('playing', () => { playing = true; });
-  el.addEventListener('pause',   () => { playing = false; });
-  return {
-    start() {
-      try { el.currentTime = 0; } catch (_) {}
-      const p = el.play();
-      if (p && typeof p.then === 'function') {
-        p.catch((e) => console.warn('[Mat Time] silent loop play() failed:', e));
-      }
-    },
-    stop() { try { el.pause(); } catch (_) {} },
-    isPlaying() { return playing; },
-    element: el,
-  };
-})();
+// Unified iOS-friendly audio strategy.
+//
+// iOS Safari (≥17 strict mode) rejects HTMLAudioElement.play() outside a
+// user gesture, even if another element is currently playing. This killed
+// the locked-screen buzzer: setTimeout fired onSegmentEnd → .play() rejected
+// with "request is not allowed by the user agent."
+//
+// The trick that works: keep the buzz element ALWAYS playing — looping the
+// buzz WAV at volume 0. To fire a buzz, we don't call play() at all; we just
+// seek to t=0 and set volume to the user's level for ~2 seconds, then drop
+// volume back to 0. Volume mutation does NOT require a gesture on iOS.
+//
+// A second silent-loop element keeps iOS' audio session in "playback"
+// category so neither element gets suspended by the OS in the background.
+//
+// Both elements are .play()'d once during a user gesture (Timer.play() or
+// the test buzzer tap), then never paused/replayed for the lifetime of the
+// run. They survive screen lock + app backgrounding.
 
-const HTMLAudioBuzz = (() => {
-  const buf = generateBuzzWav(2.0, 44100);
-  const url = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
-  const el = new Audio();
-  el.src = url;
-  el.preload = 'auto';
-  el.playsInline = true;
-  el.setAttribute('playsinline', '');     // iOS hint
-  // Volume slider drives this too
-  el.volume = 0.8;
-  // Telemetry for diagnostics
-  const tele = { lastPlay: 0, lastResult: 'never', lastError: '' };
-  el.addEventListener('playing', () => { tele.lastResult = 'playing'; });
-  el.addEventListener('ended',   () => { tele.lastResult = 'ended'; });
-  el.addEventListener('error',   () => { tele.lastResult = 'error'; tele.lastError = (el.error && el.error.code) || 'unknown'; });
+const Buzzer = (() => {
+  const silentBuf = generateSilentLoopWav(30, 44100);
+  const buzzBuf   = generateBuzzWav(2.0, 44100);
+  const silentURL = URL.createObjectURL(new Blob([silentBuf], { type: 'audio/wav' }));
+  const buzzURL   = URL.createObjectURL(new Blob([buzzBuf],   { type: 'audio/wav' }));
 
-  function fire(volume) {
-    el.volume = Math.max(0, Math.min(1, volume));
-    try {
-      el.pause();
-      el.currentTime = 0;
-    } catch (_) {}
-    tele.lastPlay = Date.now();
-    tele.lastResult = 'starting';
-    const p = el.play();
-    if (p && typeof p.then === 'function') {
-      p.catch((e) => {
-        tele.lastResult = 'rejected';
-        tele.lastError = String(e && e.message || e);
-        console.warn('[Mat Time] HTMLAudio play rejected:', e);
-      });
-    }
-    return tele;
+  function makeEl(src, vol) {
+    const el = new Audio();
+    el.src = src;
+    el.preload = 'auto';
+    el.loop = true;
+    el.volume = vol;
+    el.playsInline = true;
+    el.setAttribute('playsinline', '');
+    return el;
   }
-  return { fire, telemetry: tele, element: el };
+  // -60 dB sine on infinite loop — establishes the iOS playback session.
+  const silentEl = makeEl(silentURL, 1.0);
+  // Buzz WAV on infinite loop at volume 0. Volume gets bumped to fire a buzz.
+  const buzzEl   = makeEl(buzzURL,   0.0);
+
+  let active = false;
+  let unmuteEndTimeout = null;
+  const tele = {
+    lastFire: 0,
+    silentResult: 'idle',
+    buzzResult:   'idle',
+    silentError:  '',
+    buzzError:    '',
+  };
+
+  silentEl.addEventListener('playing', () => { tele.silentResult = 'playing'; });
+  silentEl.addEventListener('pause',   () => { tele.silentResult = 'paused';  });
+  silentEl.addEventListener('error',   () => { tele.silentError  = String((silentEl.error && silentEl.error.code) || 'err'); });
+  buzzEl.addEventListener('playing',   () => { tele.buzzResult   = 'playing'; });
+  buzzEl.addEventListener('pause',     () => { tele.buzzResult   = 'paused';  });
+  buzzEl.addEventListener('error',     () => { tele.buzzError    = String((buzzEl.error   && buzzEl.error.code)   || 'err'); });
+
+  // Idempotent. First call must be from a user gesture on iOS.
+  function start() {
+    active = true;
+    tele.silentError = '';
+    tele.buzzError = '';
+    const ps = silentEl.play();
+    if (ps && ps.catch) ps.catch((e) => {
+      tele.silentResult = 'rejected';
+      tele.silentError  = String(e && e.message || e);
+      console.warn('[Mat Time] silent.play() rejected:', e);
+    });
+    const pb = buzzEl.play();
+    if (pb && pb.catch) pb.catch((e) => {
+      tele.buzzResult = 'rejected';
+      tele.buzzError  = String(e && e.message || e);
+      console.warn('[Mat Time] buzz.play() rejected:', e);
+    });
+  }
+
+  // Make the buzz audible for ~2 seconds. Works from setTimeout / locked
+  // screen because volume mutation is not gesture-gated on iOS.
+  function fire(volume) {
+    tele.lastFire = Date.now();
+    if (!active) start();          // best effort — only succeeds inside a gesture
+    try { buzzEl.currentTime = 0; } catch (_) {}
+    buzzEl.volume = Math.max(0, Math.min(1, volume));
+    if (unmuteEndTimeout) clearTimeout(unmuteEndTimeout);
+    unmuteEndTimeout = setTimeout(() => {
+      try { buzzEl.volume = 0; } catch (_) {}
+    }, 2050);
+  }
+
+  function stop() {
+    active = false;
+    if (unmuteEndTimeout) { clearTimeout(unmuteEndTimeout); unmuteEndTimeout = null; }
+    try { silentEl.pause(); } catch (_) {}
+    try { buzzEl.pause(); buzzEl.volume = 0; } catch (_) {}
+  }
+
+  function isActive() { return active; }
+
+  return { start, stop, fire, isActive, telemetry: tele, silentEl, buzzEl };
 })();
 
 // ---------- DIAGNOSTIC READOUT ----------
@@ -652,20 +688,23 @@ function renderDiag(label) {
   if (!el) return;
   el.classList.remove('hidden');
   const ctx = Timer.audioCtx;
-  const ht  = HTMLAudioBuzz.telemetry;
+  const bt  = Buzzer.telemetry;
   const lines = [];
   lines.push('<div class="row"><strong>' + escapeHTML(label || 'Buzzer test') + '</strong><span>' + new Date().toLocaleTimeString() + '</span></div>');
   if (ctx) {
-    const stateOk = ctx.state === 'running';
-    lines.push('<div class="row"><span>Web Audio ctx</span><span class="' + (stateOk ? 'ok' : 'bad') + '">' +
+    const ctxOk = ctx.state === 'running';
+    lines.push('<div class="row"><span>Web Audio</span><span class="' + (ctxOk ? 'ok' : 'bad') + '">' +
                escapeHTML(ctx.state) + ' · ' + ctx.sampleRate + ' Hz · ' + ctx.destination.channelCount + 'ch</span></div>');
   } else {
-    lines.push('<div class="row"><span>Web Audio ctx</span><span class="bad">not created</span></div>');
+    lines.push('<div class="row"><span>Web Audio</span><span class="bad">not created</span></div>');
   }
-  const htOk = ht.lastResult === 'playing' || ht.lastResult === 'ended';
-  lines.push('<div class="row"><span>HTMLAudio</span><span class="' + (htOk ? 'ok' : 'bad') + '">' +
-             escapeHTML(ht.lastResult) + (ht.lastError ? ' · ' + escapeHTML(String(ht.lastError)) : '') + '</span></div>');
-  lines.push('<div class="row"><span>Volume</span><span>' + Math.round(state.volume * 100) + '%</span></div>');
+  const sOk = bt.silentResult === 'playing';
+  const bOk = bt.buzzResult   === 'playing';
+  lines.push('<div class="row"><span>Silent loop</span><span class="' + (sOk ? 'ok' : 'bad') + '">' +
+             escapeHTML(bt.silentResult) + (bt.silentError ? ' · ' + escapeHTML(String(bt.silentError)) : '') + '</span></div>');
+  lines.push('<div class="row"><span>Buzz loop</span><span class="' + (bOk ? 'ok' : 'bad') + '">' +
+             escapeHTML(bt.buzzResult) + (bt.buzzError ? ' · ' + escapeHTML(String(bt.buzzError)) : '') + '</span></div>');
+  lines.push('<div class="row"><span>Buzz volume</span><span>' + Math.round(state.volume * 100) + '% · current ' + Math.round(Buzzer.buzzEl.volume * 100) + '%</span></div>');
   lines.push('<div class="row"><span>UA</span><span>' + escapeHTML(navigator.userAgent.replace(/^Mozilla\/5\.0 \(/, '').slice(0, 60)) + '…</span></div>');
   el.innerHTML = lines.join('');
 }
@@ -731,7 +770,7 @@ const Timer = {
     if (this.state === 'running') return;
     // Synchronous within the gesture, for iOS audio unlock.
     this.ensureWebAudio();
-    SilentLoop.start();              // keeps iOS session + JS alive when locked
+    Buzzer.start();                   // keeps iOS session + buzz element alive
 
     const beforeMs = (this.cumBefore(this.currentIndex) + this.elapsedInSegment) * 1000;
     this.anchorMs = performance.now() - beforeMs;
@@ -755,7 +794,7 @@ const Timer = {
     this.cancelScheduledBuzzes();
     this.clearBuzzTimeouts();
     this.releaseWakeLock();
-    SilentLoop.stop();
+    Buzzer.stop();
     this.state = 'paused';
     if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
     cancelAnimationFrame(this.rafHandle);
@@ -863,7 +902,7 @@ const Timer = {
 
   // Schedule setTimeout-driven segment-end events. Each event fires the
   // HTMLAudio buzz (audible on iOS) and runs the auto/manual-advance logic.
-  // setTimeout fires reliably on iOS PWAs while the SilentLoop is playing.
+  // setTimeout fires reliably on iOS PWAs while the Buzzer silent loop is playing.
   scheduleAllBuzzesTimeouts() {
     this.clearBuzzTimeouts();
     const segs = state.segments;
@@ -889,7 +928,7 @@ const Timer = {
   // Fires when a segment's end time is reached (via setTimeout).
   // Plays the audible buzz and decides whether to auto-advance or pause.
   onSegmentEnd(segIdx) {
-    HTMLAudioBuzz.fire(state.volume);
+    Buzzer.fire(state.volume);
 
     const isLast = segIdx >= state.segments.length - 1;
     if (isLast) {
@@ -909,7 +948,7 @@ const Timer = {
     this.cancelScheduledBuzzes();
     this.releaseWakeLock();
     cancelAnimationFrame(this.rafHandle);
-    SilentLoop.stop();
+    Buzzer.stop();
     this.state = 'paused';
     this.currentIndex = segIdx + 1;
     this.elapsedInSegment = 0;
@@ -981,7 +1020,7 @@ const Timer = {
       if (this.audioCtx) {
         this.scheduleBuzzAt(this.audioCtx.currentTime + 0.05);
       }
-      HTMLAudioBuzz.fire(state.volume);
+      Buzzer.fire(state.volume);
       console.log('[Mat Time] test buzz fired · vol=' + state.volume +
                   ' · ctxState=' + (this.audioCtx ? this.audioCtx.state : 'n/a'));
       return true;
@@ -1042,7 +1081,7 @@ const Timer = {
     this.cancelScheduledBuzzes();
     this.clearBuzzTimeouts();
     this.releaseWakeLock();
-    SilentLoop.stop();
+    Buzzer.stop();
     if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
     cancelAnimationFrame(this.rafHandle);
     render();
@@ -1052,7 +1091,7 @@ const Timer = {
     this.cancelScheduledBuzzes();
     this.clearBuzzTimeouts();
     this.releaseWakeLock();
-    SilentLoop.stop();
+    Buzzer.stop();
     cancelAnimationFrame(this.rafHandle);
     this.state = 'idle';
     this.currentIndex = 0;
@@ -1231,11 +1270,11 @@ const vs = $('volSlider');
 vs.value = String(Math.round(state.volume * 100));
 vs.addEventListener('input', () => {
   state.volume = Math.max(0, Math.min(1, vs.valueAsNumber / 100));
-  HTMLAudioBuzz.element.volume = state.volume;
+  // Note: we deliberately do NOT touch Buzzer.buzzEl.volume here. The buzz
+  // element loops at 0 between buzzes; fire() reads state.volume when it
+  // needs to make a buzz audible.
   saveState();
 });
-// Initial sync
-HTMLAudioBuzz.element.volume = state.volume;
 // Tap the speaker icon button to test the buzzer.
 // Crucial: do NOT await anything before calling Timer.testBuzz() — on iOS, the
 // audio-context unlock must happen in the synchronous call stack of the user
