@@ -759,13 +759,16 @@ function generateTripleBeepWav(durationSec, sampleRate) {
 }
 
 // Catalog of available buzzer sounds. URLs are lazily generated and cached.
+// `dur` is the natural WAV duration in seconds — used by Buzzer.fire() to mute
+// the looping buzz element after one full pass (otherwise short sounds like
+// beep/triple would loop multiple times during the audible window).
 const BuzzerSounds = {
-  scoreboard: { label: 'Scoreboard buzzer', gen: () => generateBuzzWav(2.0)      },
-  bell:       { label: 'Boxing bell',       gen: () => generateBellWav(2.5)      },
-  airhorn:    { label: 'Air horn',          gen: () => generateAirhornWav(2.0)   },
-  whistle:    { label: 'Whistle',           gen: () => generateWhistleWav(1.5)   },
-  beep:       { label: 'Single beep',       gen: () => generateBeepWav(0.32)     },
-  triple:     { label: 'Triple beep',       gen: () => generateTripleBeepWav(0.85)},
+  scoreboard: { label: 'Scoreboard buzzer', dur: 2.0,  gen: () => generateBuzzWav(2.0)        },
+  bell:       { label: 'Boxing bell',       dur: 2.5,  gen: () => generateBellWav(2.5)        },
+  airhorn:    { label: 'Air horn',          dur: 2.0,  gen: () => generateAirhornWav(2.0)     },
+  whistle:    { label: 'Whistle',           dur: 1.5,  gen: () => generateWhistleWav(1.5)     },
+  beep:       { label: 'Single beep',       dur: 0.32, gen: () => generateBeepWav(0.32)       },
+  triple:     { label: 'Triple beep',       dur: 0.85, gen: () => generateTripleBeepWav(0.85) },
 };
 const _buzzerURLCache = Object.create(null);
 function getBuzzerSoundURL(key) {
@@ -947,9 +950,14 @@ const Buzzer = (() => {
     try { buzzEl.currentTime = 0; } catch (_) {}
     buzzEl.volume = Math.max(0, Math.min(1, volume));
     if (unmuteEndTimeout) clearTimeout(unmuteEndTimeout);
+    // Mute again after the WAV's natural duration so short sounds (beep,
+    // triple) don't loop multiple times. buzzEl keeps looping silently —
+    // that's fine; it preserves the iOS audio session.
+    const sKey = (BuzzerSounds[state.buzzerSound] && state.buzzerSound) || 'scoreboard';
+    const dur = (BuzzerSounds[sKey] && BuzzerSounds[sKey].dur) || 2.0;
     unmuteEndTimeout = setTimeout(() => {
       try { buzzEl.volume = 0; } catch (_) {}
-    }, 2050);
+    }, Math.round(dur * 1000));
   }
 
   function stop() {
@@ -969,17 +977,12 @@ function renderDiag(label) {
   const el = document.getElementById('diag');
   if (!el) return;
   el.classList.remove('hidden');
-  const ctx = Timer.audioCtx;
   const bt  = Buzzer.telemetry;
   const lines = [];
   lines.push('<div class="row"><strong>' + escapeHTML(label || 'Buzzer test') + '</strong><span>' + new Date().toLocaleTimeString() + '</span></div>');
-  if (ctx) {
-    const ctxOk = ctx.state === 'running';
-    lines.push('<div class="row"><span>Web Audio</span><span class="' + (ctxOk ? 'ok' : 'bad') + '">' +
-               escapeHTML(ctx.state) + ' · ' + ctx.sampleRate + ' Hz · ' + ctx.destination.channelCount + 'ch</span></div>');
-  } else {
-    lines.push('<div class="row"><span>Web Audio</span><span class="bad">not created</span></div>');
-  }
+  const soundKey = state.buzzerSound || 'scoreboard';
+  const soundLabel = (BuzzerSounds[soundKey] && BuzzerSounds[soundKey].label) || soundKey;
+  lines.push('<div class="row"><span>Sound</span><span>' + escapeHTML(soundLabel) + '</span></div>');
   const sOk = bt.silentResult === 'playing';
   const bOk = bt.buzzResult   === 'playing';
   lines.push('<div class="row"><span>Silent loop</span><span class="' + (sOk ? 'ok' : 'bad') + '">' +
@@ -992,10 +995,14 @@ function renderDiag(label) {
 }
 
 // ---------- TIMER ENGINE ----------
+//
+// Audio strategy: all buzzes flow through Buzzer (HTMLAudio elements) which
+// is the only path that reliably works across desktop + iOS, including with
+// the screen locked. We used to fire Web Audio in parallel as a "desktop
+// fallback", but that played the hardcoded scoreboard synth on top of the
+// user-selected HTMLAudio sound — so it's gone.
 const Timer = {
-  audioCtx: null,
-  scheduledBuzzes: [],     // Web Audio scheduled buzz nodes (desktop path)
-  buzzTimeouts: [],        // setTimeout IDs for HTMLAudio buzz playback (iOS path)
+  buzzTimeouts: [],        // setTimeout IDs for HTMLAudio buzz playback
   wakeLock: null,
   state: 'idle',           // 'idle' | 'running' | 'paused' | 'finished'
   anchorMs: 0,             // performance.now() at the virtual plan start
@@ -1003,20 +1010,6 @@ const Timer = {
   elapsedInSegment: 0,     // seconds elapsed in the current phase (segment OR buffer)
   inBuffer: false,         // true when paused/running in the buffer BEFORE currentIndex
   rafHandle: null,
-
-  // Best-effort: create + resume Web Audio. Must be called from a gesture.
-  // Used for the desktop buzz path; iOS often silences the output even when
-  // state === 'running', so we never rely on Web Audio alone.
-  ensureWebAudio() {
-    if (!this.audioCtx) {
-      const Ctx = window.AudioContext || window.webkitAudioContext;
-      if (!Ctx) return;
-      this.audioCtx = new Ctx();
-    }
-    if (this.audioCtx.state === 'suspended') {
-      this.audioCtx.resume().catch(() => {});
-    }
-  },
 
   setupMediaSession() {
     if (!('mediaSession' in navigator)) return;
@@ -1052,14 +1045,12 @@ const Timer = {
   play() {
     if (this.state === 'running') return;
     // Synchronous within the gesture, for iOS audio unlock.
-    this.ensureWebAudio();
     Buzzer.start();                   // keeps iOS session + buzz element alive
 
     const beforeMs = (this.cumBefore(this.currentIndex, this.inBuffer) + this.elapsedInSegment) * 1000;
     this.anchorMs = performance.now() - beforeMs;
 
-    this.scheduleAllBuzzesWebAudio();   // desktop audible path
-    this.scheduleAllBuzzesTimeouts();   // iOS audible path + advance logic
+    this.scheduleAllBuzzesTimeouts();
 
     this.state = 'running';
     this.requestWakeLock();
@@ -1075,7 +1066,6 @@ const Timer = {
     this.currentIndex = loc.index;
     this.elapsedInSegment = loc.elapsedInSeg;
     this.inBuffer = loc.inBuffer;
-    this.cancelScheduledBuzzes();
     this.clearBuzzTimeouts();
     this.releaseWakeLock();
     Buzzer.stop();
@@ -1125,7 +1115,6 @@ const Timer = {
   reschedule() {
     const beforeMs = (this.cumBefore(this.currentIndex, this.inBuffer) + this.elapsedInSegment) * 1000;
     this.anchorMs = performance.now() - beforeMs;
-    this.scheduleAllBuzzesWebAudio();
     this.scheduleAllBuzzesTimeouts();
   },
 
@@ -1185,34 +1174,10 @@ const Timer = {
     return { inBuffer: false, index: state.segments.length - 1, elapsedInSeg: state.segments[state.segments.length - 1].seconds, past: true };
   },
 
-  // Pre-schedule Web Audio buzzes for the desktop path. iOS often silences
-  // these but the desktop browser plays them clearly. Includes buzz at end
-  // of each buffer phase (== start of next segment) when buffer is enabled.
-  scheduleAllBuzzesWebAudio() {
-    this.cancelScheduledBuzzes();
-    if (!this.audioCtx) return;
-    const ctx = this.audioCtx;
-    const segs = state.segments;
-    const buf = bufferSeconds();
-    const nowMs = performance.now();
-    let cum = 0;
-    for (let i = 0; i < segs.length; i++) {
-      cum += segs[i].seconds;
-      const fireSeg = this.anchorMs + cum * 1000;
-      const delaySec = (fireSeg - nowMs) / 1000;
-      if (delaySec > 0.05) this.scheduleBuzzAt(ctx.currentTime + delaySec);
-      if (buf > 0 && i < segs.length - 1) {
-        cum += buf;
-        const fireBuf = this.anchorMs + cum * 1000;
-        const delayBuf = (fireBuf - nowMs) / 1000;
-        if (delayBuf > 0.05) this.scheduleBuzzAt(ctx.currentTime + delayBuf);
-      }
-    }
-  },
-
   // Schedule setTimeout-driven phase-end events. Each event fires the
-  // HTMLAudio buzz (audible on iOS) and runs the auto/manual-advance logic.
-  // setTimeout fires reliably on iOS while the Buzzer silent loop is playing.
+  // HTMLAudio buzz (audible everywhere) and runs the auto/manual-advance
+  // logic. setTimeout fires reliably on iOS while the Buzzer silent loop
+  // is playing in the background.
   scheduleAllBuzzesTimeouts() {
     this.clearBuzzTimeouts();
     const segs = state.segments;
@@ -1279,7 +1244,6 @@ const Timer = {
 
   _pauseAtSegment(nextIdx) {
     this.clearBuzzTimeouts();
-    this.cancelScheduledBuzzes();
     this.releaseWakeLock();
     cancelAnimationFrame(this.rafHandle);
     Buzzer.stop();
@@ -1294,70 +1258,13 @@ const Timer = {
     flashToast('Ready: "' + state.segments[nextIdx].name + '" · tap ▶');
   },
 
-  // Scoreboard horn: 2 detuned sawtooth oscillators, ~2s, with envelope and filters
-  scheduleBuzzAt(time) {
-    const ctx = this.audioCtx;
-    const vol = state.volume;
-    if (vol <= 0) {
-      // Still schedule a marker so we know it would have fired, but no sound
-      this.scheduledBuzzes.push({ time, nodes: [] });
-      return;
-    }
-    const buzz = { time, nodes: [] };
-    const masterGain = ctx.createGain();
-    masterGain.gain.setValueAtTime(0, time);
-    masterGain.gain.linearRampToValueAtTime(vol * 0.45, time + 0.025);
-    masterGain.gain.setValueAtTime(vol * 0.45, time + 1.75);
-    masterGain.gain.linearRampToValueAtTime(0, time + 2.0);
-
-    const lowpass = ctx.createBiquadFilter();
-    lowpass.type = 'lowpass';
-    lowpass.frequency.value = 1800;
-    lowpass.Q.value = 0.9;
-
-    const highpass = ctx.createBiquadFilter();
-    highpass.type = 'highpass';
-    highpass.frequency.value = 80;
-
-    masterGain.connect(lowpass).connect(highpass).connect(ctx.destination);
-
-    for (const freq of [165, 169]) {
-      const osc = ctx.createOscillator();
-      osc.type = 'sawtooth';
-      osc.frequency.value = freq;
-      osc.connect(masterGain);
-      osc.start(time);
-      osc.stop(time + 2.05);
-      buzz.nodes.push(osc);
-    }
-    buzz.nodes.push(masterGain, lowpass, highpass);
-    this.scheduledBuzzes.push(buzz);
-  },
-
-  cancelScheduledBuzzes() {
-    for (const buzz of this.scheduledBuzzes) {
-      for (const n of buzz.nodes) {
-        try { n.stop && n.stop(0); } catch (_) {}
-        try { n.disconnect && n.disconnect(); } catch (_) {}
-      }
-    }
-    this.scheduledBuzzes = [];
-  },
-
-  // Test the buzzer. Must be invoked synchronously inside a user-gesture
-  // handler — iOS only allows AudioContext.resume() to escape the suspended
-  // state if the call originates inside that gesture's call stack.
-  // We fire BOTH the Web Audio buzz AND an HTMLAudioElement playing a
-  // generated WAV — on iOS, the latter is much more reliably routed.
+  // Tap-the-speaker test. Fires a single buzz of the currently-selected
+  // sound. Must be invoked synchronously inside a user-gesture handler on
+  // iOS (the speaker button click qualifies).
   testBuzz() {
     try {
-      this.ensureWebAudio();
-      if (this.audioCtx) {
-        this.scheduleBuzzAt(this.audioCtx.currentTime + 0.05);
-      }
       Buzzer.fire(state.volume);
-      console.log('[Mat Time] test buzz fired · vol=' + state.volume +
-                  ' · ctxState=' + (this.audioCtx ? this.audioCtx.state : 'n/a'));
+      console.log('[Mat Time] test buzz fired · vol=' + state.volume + ' · sound=' + (state.buzzerSound || 'scoreboard'));
       return true;
     } catch (e) {
       console.error('[Mat Time] testBuzz failed:', e);
@@ -1424,7 +1331,6 @@ const Timer = {
     this.currentIndex = state.segments.length - 1;
     this.elapsedInSegment = state.segments[this.currentIndex].seconds;
     this.inBuffer = false;
-    this.cancelScheduledBuzzes();
     this.clearBuzzTimeouts();
     this.releaseWakeLock();
     Buzzer.stop();
@@ -1435,7 +1341,6 @@ const Timer = {
   },
 
   reset() {
-    this.cancelScheduledBuzzes();
     this.clearBuzzTimeouts();
     this.releaseWakeLock();
     Buzzer.stop();
