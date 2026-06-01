@@ -797,22 +797,13 @@ const SilentKeeper = (() => {
   let ctx = null;
   let osc = null;
   let gain = null;
-  let active = false;
 
-  function ensure() {
-    if (ctx) return;
-    const Ctx = window.AudioContext || window.webkitAudioContext;
-    if (!Ctx) return;
-    ctx = new Ctx();
-  }
-
-  // Must be called from a user gesture the first time, for ctx.resume().
+  // Must be called from a user gesture the first time on iOS.
   function start() {
-    ensure();
-    if (!ctx) return;
-    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
-    if (!osc) {
-      // Near-zero-gain sine: keeps the DSP graph "running" without audible output.
+    if (!ctx) {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      ctx = new Ctx();
       osc = ctx.createOscillator();
       osc.type = 'sine';
       osc.frequency.value = 100;
@@ -820,19 +811,26 @@ const SilentKeeper = (() => {
       gain.gain.value = 0.00001;        // ≈ -100 dB, inaudible
       osc.connect(gain).connect(ctx.destination);
       osc.start();
+    } else if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
     }
-    active = true;
   }
 
+  // Fully close the context — stronger than suspend(). iOS releases the
+  // audio session more cleanly, so the system-level "interruption ended"
+  // notification fires and background apps (Spotify) resume.
   function stop() {
-    active = false;
-    // Suspending the context releases iOS's Web-Audio session entirely.
-    if (ctx && ctx.state === 'running') ctx.suspend().catch(() => {});
+    if (ctx) {
+      try { ctx.close(); } catch (_) {}
+      ctx = null;
+      osc = null;
+      gain = null;
+    }
   }
 
   return {
     start, stop,
-    isActive: () => active,
+    isActive: () => ctx !== null && ctx.state === 'running',
     getState: () => ctx ? ctx.state : 'no-ctx',
   };
 })();
@@ -980,7 +978,28 @@ const Buzzer = (() => {
 
   function stop() {
     active = false;
-    try { buzzEl.pause(); buzzEl.volume = 0; buzzEl.currentTime = 0; } catch (_) {}
+    try {
+      buzzEl.pause();
+      buzzEl.volume = 0;
+      buzzEl.currentTime = 0;
+      // Aggressively release the iOS media decoder + audio session.
+      // pause() alone leaves the session "interruptable" — iOS may hold
+      // onto it long enough to skip the resume-Spotify signal. Detaching
+      // src and load()'ing is the strongest "we are done" hint we can send
+      // from JS, and on iOS this is what makes Spotify resume immediately.
+      buzzEl.removeAttribute('src');
+      buzzEl.load();
+    } catch (_) {}
+    blessed = false;
+    currentSoundKey = null;  // syncSound() will re-set src next time
+    // Clear any MediaSession claim so the lock-screen Now Playing slot is
+    // released too.
+    if ('mediaSession' in navigator) {
+      try {
+        navigator.mediaSession.playbackState = 'none';
+        navigator.mediaSession.metadata = null;
+      } catch (_) {}
+    }
     SilentKeeper.stop();
     tele.keeperState = SilentKeeper.getState();
   }
